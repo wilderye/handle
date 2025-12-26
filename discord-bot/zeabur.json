@@ -1,9 +1,0 @@
-{
-  "$schema": "https://zeabur.com/schema/zeabur.json",
-  "build": {
-    "command": "npm run build"
-  },
-  "start": {
-    "command": "npm start"
-  }
-}
