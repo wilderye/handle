@@ -8,5 +8,5 @@ node_modules
 .idea/
 *.log
 .netlify
-.env
+
 src/data/unknown.txt

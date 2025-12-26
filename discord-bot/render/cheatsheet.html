@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>汉兜 - 速查表</title>
+  <!-- Google Fonts - Noto Serif SC -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@200;400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --c-ok: #1d9c9c;
+      --c-mis: #de7525;
+      --c-bg: #ffffff;
+      --c-text: #374151;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: var(--c-bg);
+      color: var(--c-text);
+      padding: 0;
+      display: inline-block;
+    }
+    
+    .cheatsheet {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      padding: 24px;
+      background: var(--c-bg);
+    }
+    
+    .title {
+      font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+      font-size: 20px;
+      font-weight: bold;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    
+    .section {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 40px;
+    }
+    
+    .section-label {
+      text-align: center;
+      font-size: 14px;
+      color: #9ca3af; /* gray-400 */
+      margin-bottom: 12px;
+      font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+    }
+    
+    .column {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    /* 声母网格 - 2列 */
+    .initials-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    
+    /* 韵母网格 - 3列 */
+    .finals-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    
+    .symbol {
+      font-size: 16px;
+      text-align: center;
+      font-weight: 300;
+    }
+    
+    .symbol.text-ok { color: var(--c-ok); font-weight: normal; }
+    .symbol.text-mis { color: var(--c-mis); font-weight: normal; }
+    .symbol.op30 { opacity: 0.3; }
+  </style>
+</head>
+<body>
+  <div class="cheatsheet" id="cheatsheet">
+    <div class="section">
+      <div class="column">
+        <div class="section-label">声母</div>
+        <div class="initials-grid" id="initials"></div>
+      </div>
+      <div class="column">
+        <div class="section-label">韵母</div>
+        <div class="finals-grid" id="finals"></div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // 声母列表
+    const initials = ['b', 'p', 'm', 'f', 'd', 't', 'n', 'l', 'g', 'k', 'h', 'j', 'q', 'x', 'zh', 'ch', 'sh', 'r', 'z', 'c', 's', 'y', 'w'];
+    
+    // 韵母列表
+    const finals = ['a', 'o', 'e', 'i', 'u', 'v', 'ai', 'ei', 'ao', 'ou', 'an', 'en', 'ang', 'eng', 'ong', 'ia', 'ie', 'iu', 'ian', 'in', 'iang', 'ing', 'iong', 'ua', 'uo', 'uai', 'ui', 'uan', 'un', 'uang', 've', 'van', 'vn'];
+    
+    const params = new URLSearchParams(window.location.search);
+    const dataParam = params.get('data');
+    
+    let states = { initials: {}, finals: {} };
+    
+    if (dataParam) {
+      try {
+        states = JSON.parse(decodeURIComponent(dataParam));
+      } catch (e) {
+        console.error('解析数据失败:', e);
+      }
+    }
+    
+    function getSymbolClass(state) {
+      if (!state) return '';
+      const classes = {
+        exact: 'text-ok',
+        misplaced: 'text-mis',
+        none: 'op30',
+      };
+      return classes[state] || '';
+    }
+    
+    function renderSymbols(containerId, symbols, stateMap) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+      
+      symbols.forEach(symbol => {
+        const el = document.createElement('div');
+        const state = stateMap[symbol] || '';
+        el.className = 'symbol ' + getSymbolClass(state);
+        el.textContent = symbol.replace(/v/g, 'ü');
+        container.appendChild(el);
+      });
+    }
+    
+    renderSymbols('initials', initials, states.initials || {});
+    renderSymbols('finals', finals, states.finals || {});
+  </script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 {
   "type": "module",
   "private": true,
-  "packageManager": "pnpm@7.8.0",
+  "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "vite --port 4444",
     "netlify": "netlify dev --port 3333 --targetPort 4444",

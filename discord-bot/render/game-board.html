@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>汉兜 - 游戏结果</title>
+  <!-- Google Fonts - Noto Serif SC -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@200;400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --c-ok: #1d9c9c;
+      --c-mis: #de7525;
+      --c-bg: #ffffff;
+      --c-gray: #e5e7eb; /* gray-200 */
+      --c-text: #374151; /* gray-700 */
+      --c-block-bg: #f9fafb; /* gray-50 */
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+      background: var(--c-bg);
+      color: var(--c-text);
+      padding: 0;
+      display: inline-block;
+    }
+    
+    .game-board {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      background: var(--c-bg);
+    }
+    
+    .word-row {
+      display: flex;
+      gap: 8px;
+    }
+    
+    /* 字块样式 - 80x80 */
+    .char-block {
+      width: 80px;
+      height: 80px;
+      border: 2px solid var(--c-gray);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      background: var(--c-block-bg);
+    }
+    
+    /* 完全正确时的样式 */
+    .char-block.all-exact {
+      background: var(--c-ok);
+      border-color: transparent;
+      color: white;
+    }
+    
+    /* 部分正确时的背景 */
+    .char-block.has-answer {
+      background: #f3f4f6; /* gray-100 */
+      border-color: transparent;
+    }
+    
+    /* 汉字 */
+    .char {
+      font-size: 32px;
+      line-height: 1;
+      position: absolute;
+      top: 34px; /* top-8.5 */
+      font-weight: normal;
+    }
+    
+    .char.text-ok { color: var(--c-ok); }
+    .char.text-mis { color: var(--c-mis); }
+    .char.op80 { opacity: 0.8; }
+    .char.text-white { color: white; }
+    
+    /* 拼音容器 */
+    .pinyin {
+      position: absolute;
+      top: 11px; /* top-11px */
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-weight: 100; /* font-100 */
+      font-size: 14px;
+      line-height: 1;
+    }
+    
+    .pinyin-group {
+      display: flex;
+      position: relative;
+      margin: 0 1px;
+    }
+    
+    .pinyin-char-container {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .pinyin-char {
+      /* font-mono */
+    }
+    
+    .pinyin-char.text-ok { color: var(--c-ok); }
+    .pinyin-char.text-mis { color: var(--c-mis); }
+    .pinyin-char.op35 { opacity: 0.35; }
+    .pinyin-char.text-white { color: white; }
+    
+    /* 声调 SVG */
+    .tone-svg {
+      position: absolute;
+      width: 86%; /* w-86% */
+      left: 7%; /* left-8% -> 居中微调 */
+      bottom: 0.78rem; /* bottom: 0.78rem */
+      opacity: 0.8;
+      pointer-events: none;
+    }
+    
+    .tone-svg.text-ok { color: var(--c-ok); opacity: 1; }
+    .tone-svg.text-mis { color: var(--c-mis); opacity: 1; }
+    .tone-svg.text-white { color: white; opacity: 1; }
+    .tone-svg.op35 { opacity: 0.35; }
+  </style>
+</head>
+<body>
+  <div class="game-board" id="game-board">
+    <!-- 动态生成内容 -->
+  </div>
+  
+  <script>
+    // 声调 SVG 路径
+    const tonePaths = {
+      1: "M3.35 8C2.60442 8 2 8.60442 2 9.35V10.35C2 11.0956 2.60442 11.7 3.35 11.7H17.35C18.0956 11.7 18.7 11.0956 18.7 10.35V9.35C18.7 8.60442 18.0956 8 17.35 8H3.35Z",
+      2: "M16.581 3.71105C16.2453 3.27254 15.6176 3.18923 15.1791 3.52498L3.26924 12.6439C2.83073 12.9796 2.74743 13.6073 3.08318 14.0458L4.29903 15.6338C4.63478 16.0723 5.26244 16.1556 5.70095 15.8199L17.6108 6.70095C18.0493 6.3652 18.1327 5.73754 17.7969 5.29903L16.581 3.71105Z",
+      3: "M1.70711 7.70712C1.31658 7.3166 1.31658 6.68343 1.70711 6.29291L2.41421 5.5858C2.80474 5.19528 3.4379 5.19528 3.82843 5.5858L9.31502 11.0724C9.70555 11.4629 10.3387 11.4629 10.7292 11.0724L16.2158 5.5858C16.6064 5.19528 17.2395 5.19528 17.63 5.5858L18.3372 6.29291C18.7277 6.68343 18.7277 7.3166 18.3372 7.70712L10.7292 15.315C10.3387 15.7056 9.70555 15.7056 9.31502 15.315L1.70711 7.70712Z",
+      4: "M4.12282 3.71105C4.45857 3.27254 5.08623 3.18923 5.52474 3.52498L17.4346 12.6439C17.8731 12.9796 17.9564 13.6073 17.6207 14.0458L16.4048 15.6338C16.0691 16.0723 15.4414 16.1556 15.0029 15.8199L3.09303 6.70095C2.65452 6.3652 2.57122 5.73754 2.90697 5.29903L4.12282 3.71105Z"
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    const dataParam = params.get('data');
+    
+    if (dataParam) {
+      try {
+        const data = JSON.parse(decodeURIComponent(dataParam));
+        renderGameBoard(data);
+      } catch (e) {
+        console.error('解析数据失败:', e);
+      }
+    }
+    
+    // 计算声调位置 - 1:1 复刻原版逻辑
+    function getToneCharLocation(part) {
+      if (!part) return 0;
+      const locations = [
+        part.lastIndexOf('iu') > -1 ? part.lastIndexOf('iu') + 1 : -1,
+        part.lastIndexOf('a'),
+        part.lastIndexOf('e'),
+        part.lastIndexOf('o'),
+        part.lastIndexOf('i'),
+        part.lastIndexOf('u'),
+        part.lastIndexOf('v'),
+      ];
+      const found = locations.find(i => i !== null && i >= 0);
+      return found !== undefined ? found : 0;
+    }
+    
+    function renderGameBoard(data) {
+      const board = document.getElementById('game-board');
+      board.innerHTML = '';
+      
+      data.tries.forEach((word, rowIndex) => {
+        const row = document.createElement('div');
+        row.className = 'word-row';
+        
+        const chars = Array.from(word);
+        const results = data.results[rowIndex] || [];
+        const parsed = data.parsed[rowIndex] || [];
+        
+        chars.forEach((char, charIndex) => {
+          const result = results[charIndex] || {};
+          const charData = parsed[charIndex] || {};
+          
+          // 判断是否全部正确
+          const allExact = result.char === 'exact' && 
+                          result._1 === 'exact' && 
+                          result._2 === 'exact' && 
+                          result.tone === 'exact';
+          
+          const block = document.createElement('div');
+          block.className = 'char-block';
+          if (allExact) {
+            block.classList.add('all-exact');
+          } else if (result.char) {
+            block.classList.add('has-answer');
+          }
+          
+          // 拼音容器
+          const pinyinEl = document.createElement('div');
+          pinyinEl.className = 'pinyin';
+          
+          // 声母
+          if (charData._1) {
+            const part1 = document.createElement('div');
+            part1.className = 'pinyin-char ' + getColorClass(result._1, allExact);
+            part1.textContent = charData._1;
+            part1.style.marginRight = '1px';
+            pinyinEl.appendChild(part1);
+          }
+          
+          // 韵母 - 需要拆分字符以定位声调
+          if (charData._2) {
+            const part2Group = document.createElement('div');
+            part2Group.className = 'pinyin-group';
+            part2Group.style.marginLeft = '1px';
+            
+            // 计算声调位置
+            const toneIndex = getToneCharLocation(charData._2);
+            
+            // 拆分韵母字符
+            const finalChars = Array.from(charData._2);
+            
+            finalChars.forEach((c, idx) => {
+              const charContainer = document.createElement('div');
+              charContainer.className = 'pinyin-char-container';
+              
+              const charSpan = document.createElement('span');
+              charSpan.className = 'pinyin-char ' + getColorClass(result._2, allExact);
+              // v -> u
+              charSpan.textContent = c === 'v' ? 'u' : c;
+              
+              charContainer.appendChild(charSpan);
+              
+              // 如果是声调位置，添加声调 SVG
+              if (idx === toneIndex && charData.tone && tonePaths[charData.tone]) {
+                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.setAttribute("viewBox", "0 0 20 20");
+                svg.setAttribute("fill", "none");
+                svg.setAttribute("class", "tone-svg " + getColorClass(result.tone, allExact));
+                
+                // 特殊位置调整：如果是 v (显示为 u)，声调位置要微调
+                if (c === 'v') {
+                  svg.style.bottom = '0.85rem';
+                }
+                
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute("d", tonePaths[charData.tone]);
+                path.setAttribute("fill", "currentColor");
+                
+                svg.appendChild(path);
+                charContainer.appendChild(svg);
+              }
+              
+              part2Group.appendChild(charContainer);
+            });
+            
+            pinyinEl.appendChild(part2Group);
+          }
+          
+          block.appendChild(pinyinEl);
+          
+          // 汉字
+          const charEl = document.createElement('div');
+          charEl.className = 'char ' + getColorClass(result.char, allExact, true);
+          charEl.textContent = char;
+          block.appendChild(charEl);
+          
+          row.appendChild(block);
+        });
+        
+        board.appendChild(row);
+      });
+    }
+    
+    function getColorClass(state, allExact, isChar = false) {
+      if (allExact) return 'text-white';
+      if (!state) return isChar ? 'op80' : 'op35';
+      
+      const colors = {
+        exact: 'text-ok',
+        misplaced: 'text-mis',
+        none: isChar ? 'op80' : 'op35',
+      };
+      return colors[state] || '';
+    }
+  </script>
+</body>
+</html>
