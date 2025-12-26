@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "汉兜 Discord Bot - 猜成语游戏",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "src/index.ts",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "build": "echo 'No build needed - using tsx runtime'",
+    "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "deploy": "tsx src/deploy-commands.ts"
   },
@@ -14,7 +14,8 @@
     "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
     "pinyin": "^3.1.0",
-    "puppeteer": "^21.6.1"
+    "puppeteer": "^21.6.1",
+    "tsx": "^4.6.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
@@ -22,7 +23,6 @@
     "@typescript-eslint/eslint-plugin": "^8.50.1",
     "@typescript-eslint/parser": "^8.50.1",
     "eslint": "^9.39.2",
-    "tsx": "^4.6.2",
     "typescript": "^5.3.0",
     "typescript-eslint": "^8.50.1"
   }
