@@ -1,12 +1,24 @@
-.DS_Store
-.vite-ssg-dist
-.vite-ssg-temp
-*.local
-dist
-dist-ssr
-node_modules
-.idea/
-*.log
-.netlify
+# 依赖
+node_modules/
 
-src/data/unknown.txt
+# 构建产物
+dist/
+
+# 环境变量 (敏感信息)
+.env
+.env.local
+.env.*.local
+
+# 日志
+*.log
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db

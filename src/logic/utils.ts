@@ -1,38 +1,40 @@
-import seedrandom from 'seedrandom'
-import type { SpMode } from '@hankit/tools'
-import { pinyinInitials, toShuangpin, toSimplified, toZhuyin } from '@hankit/tools'
-import type { InputMode, MatchResult, ParsedChar } from './types'
-import { getPinyin } from './idioms'
+import { getPinyin, toSimplified } from './idioms'
+import type { MatchResult, ParsedChar } from './types'
 
-export function parsePinyin(pinyin: string, mode: InputMode = 'py', spMode: SpMode = 'sougou') {
-  let parts: string[] = []
-  if (pinyin) {
-    if (mode === 'zy') {
-      parts = Array.from(pinyin.trim() ? toZhuyin(pinyin) : '')
-    }
-    else if (mode === 'sp') {
-      parts = Array.from(toShuangpin(pinyin, spMode))
-    }
-    else {
-      let rest = pinyin
-      const one = pinyinInitials.find(i => rest.startsWith(i))
-      if (one)
-        rest = rest.slice(one.length)
-      parts = [one, rest].filter(Boolean) as string[]
-    }
+// 拼音声母列表
+const pinyinInitials = [
+  'zh', 'ch', 'sh', 'b', 'p', 'm', 'f', 'd', 't', 'n', 'l',
+  'g', 'k', 'h', 'j', 'q', 'x', 'r', 'z', 'c', 's', 'y', 'w',
+]
+
+// 解析拼音为声母和韵母
+export function parsePinyin(pinyin: string): string[] {
+  if (!pinyin) return []
+  
+  let rest = pinyin
+  const initial = pinyinInitials.find(i => rest.startsWith(i))
+  if (initial) {
+    rest = rest.slice(initial.length)
   }
+  
+  const parts = [initial || '', rest].filter(Boolean)
   return parts
 }
 
-export function parseChar(char: string, pinyin?: string, mode?: InputMode, spMode?: SpMode): ParsedChar {
-  if (!pinyin)
-    pinyin = getPinyin(char)[0]
+// 解析单个字符
+export function parseChar(char: string, pinyin?: string): ParsedChar {
+  if (!pinyin) {
+    const pinyins = getPinyin(char)
+    pinyin = pinyins[0] || ''
+  }
+  
   const tone = pinyin.match(/[\d]$/)?.[0] || ''
-  if (tone)
+  if (tone) {
     pinyin = pinyin.slice(0, -tone.length).trim()
+  }
 
-  const parts = parsePinyin(pinyin, mode, spMode)
-  // if there is no final, actually it's no intital
+  const parts = parsePinyin(pinyin)
+  // 如果没有韵母，说明其实是零声母
   if (parts[0] && !parts[1]) {
     parts[1] = parts[0]
     parts[0] = ''
@@ -42,7 +44,7 @@ export function parseChar(char: string, pinyin?: string, mode?: InputMode, spMod
 
   return {
     char,
-    _1: one,
+    _1: one || '',
     _2: two,
     _3: three,
     parts,
@@ -51,36 +53,40 @@ export function parseChar(char: string, pinyin?: string, mode?: InputMode, spMod
   }
 }
 
-export function parseWord(word: string, answer?: string, mode?: InputMode, spMode?: SpMode) {
+// 解析整个词语
+export function parseWord(word: string, answer?: string): ParsedChar[] {
   const pinyins = getPinyin(word)
   const chars = Array.from(word)
   const answerPinyin = answer ? getPinyin(answer) : undefined
 
   return chars.map((char, i): ParsedChar => {
-    let pinyin = pinyins[i] || ''
-    // try match the pinyin from the answer word
-    if (answerPinyin && answer && answer.includes(char))
-      pinyin = answerPinyin[answer.indexOf(char)] || pinyin
-    return parseChar(char, pinyin, mode, spMode)
+    let charPinyin = pinyins[i] || ''
+    // 尝试从答案中匹配拼音
+    if (answerPinyin && answer && answer.includes(char)) {
+      charPinyin = answerPinyin[answer.indexOf(char)] || charPinyin
+    }
+    return parseChar(char, charPinyin)
   })
 }
 
-export function testAnswer(input: ParsedChar[], answer: ParsedChar[]) {
+// 比较答案
+export function testAnswer(input: ParsedChar[], answer: ParsedChar[]): MatchResult[] {
   const unmatched = {
     char: answer
       .map((a, i) => toSimplified(input[i].char) === toSimplified(a.char) ? undefined : toSimplified(a.char))
-      .filter(i => i != null),
+      .filter(i => i != null) as string[],
     tone: answer
       .map((a, i) => input[i].tone === a.tone ? undefined : a.tone)
-      .filter(i => i != null),
+      .filter(i => i != null) as number[],
     parts: answer
       .flatMap((a, i) => a.parts.filter(p => !input[i].parts.includes(p)))
       .filter(i => i != null) as string[],
   }
 
-  function includesAndRemove<T>(arr: T[], v: T) {
-    if (arr.includes(v)) {
-      arr.splice(arr.indexOf(v), 1)
+  function includesAndRemove<T>(arr: T[], v: T): boolean {
+    const idx = arr.indexOf(v)
+    if (idx !== -1) {
+      arr.splice(idx, 1)
       return true
     }
     return false
@@ -118,40 +124,14 @@ export function testAnswer(input: ParsedChar[], answer: ParsedChar[]) {
   })
 }
 
-export function checkPass(result: MatchResult[]) {
+// 检查是否猜中
+export function checkPass(result: MatchResult[]): boolean {
   return result.every(r => r.char === 'exact')
 }
 
-export function getHint(word: string) {
-  return word[Math.floor(seedrandom(word)() * word.length)]
-}
-
-const numberChar = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
-const tens = ['', '十', '百', '千']
-
-export function numberToHanzi(number: number) {
-  const digits = Array.from(number.toString()).map(i => +i)
-  const chars = digits.map((i, idx) => {
-    const unit = i !== 0 ? tens[digits.length - 1 - idx] : ''
-    return numberChar[i] + unit
-  })
-  const str = chars.join('')
-  return str
-    .replace('一十', '十')
-    .replace('一百', '百')
-    .replace('二十', '廿')
-    .replace(/零+/, '零')
-    .replace(/(.)零$/, '$1')
-}
-
-/**
-* Checks whether a given date is in daylight saving time.
-* @param date the date object to be checked.
-* @returns true if the date is in daylight saving time, false if it's not.
-*/
-export function isDstObserved(date: Date) {
-  const jan = new Date(date.getFullYear(), 0, 1)
-  const jul = new Date(date.getFullYear(), 6, 1)
-  const standardTimezoneOffset = Math.max(jan.getTimezoneOffset(), jul.getTimezoneOffset())
-  return date.getTimezoneOffset() < standardTimezoneOffset
+// 获取提示字
+export function getHint(word: string): string {
+  // 简单随机选一个字作为提示
+  const idx = Math.floor(Math.random() * word.length)
+  return word[idx]
 }

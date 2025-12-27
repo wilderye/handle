@@ -1,6 +1,4 @@
-export type MatchType = 'exact' | 'misplaced' | 'none' | 'deleted'
-
-export type InputMode = 'py' | 'zy' | 'sp'
+export type MatchType = 'exact' | 'misplaced' | 'none'
 
 export interface ParsedChar {
   char: string
@@ -20,16 +18,19 @@ export interface MatchResult {
   tone: MatchType
 }
 
-export interface TriesMeta {
-  answer?: boolean
-  start?: number
-  end?: number
-  duration?: number
-  failed?: boolean
-  passed?: boolean
-  tries?: string[]
-  hint?: boolean
-  hintLevel?: number
-  strict?: boolean
-  sent?: boolean
+export interface GameState {
+  answer: string
+  hint: string
+  tries: string[]
+  results: MatchResult[][]
+  participants: Set<string>
+  startTime: number
 }
+
+export interface PlayerStats {
+  oddsPlayedGames: number
+  wonGames: number
+}
+
+export const WORD_LENGTH = 4
+export const TRIES_LIMIT = 10
