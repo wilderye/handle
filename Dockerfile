@@ -1,15 +1,15 @@
 FROM node:20-slim
 
-# 安装 Puppeteer 依赖和中文字体
+# 安装 Canvas 编译依赖和中文字体
 RUN apt-get update && apt-get install -y \
-    chromium \
-    fonts-noto-cjk \
+    build-essential \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg-dev \
+    libgif-dev \
+    librsvg2-dev \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
-
-# 设置 Puppeteer 使用系统 Chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
