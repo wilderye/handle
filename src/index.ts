@@ -1,7 +1,6 @@
 import { ChatInputCommandInteraction, Client, Collection, Events, GatewayIntentBits } from 'discord.js'
 import { config } from 'dotenv'
 import { commands } from './commands/index.js'
-import { warmupBrowser } from './screenshot/index.js'
 
 // 加载环境变量
 config()
@@ -34,8 +33,8 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.log(`📊 已加入 ${readyClient.guilds.cache.size} 个服务器`)
   console.log(`🎮 已加载 ${client.commands.size} 个命令`)
   
-  // 预热 Puppeteer 浏览器
-  await warmupBrowser()
+  // 预热 Puppeteer 浏览器 (Canvas 模式下无需预热)
+  // await warmupBrowser()
 })
 
 // 处理斜杠命令

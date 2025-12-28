@@ -1,3 +1,3 @@
-export { closeBrowser, generateCheatsheetScreenshot, generateGameBoardScreenshot, warmupBrowser } from './service.js'
-export type { CheatsheetData, GameBoardData } from './service.js'
+export { closeBrowser, generateCheatsheetScreenshot, generateGameBoardScreenshot, warmupBrowser } from './canvas-service.js'
+export type { CheatsheetData, GameBoardData } from './canvas-service.js'
 
