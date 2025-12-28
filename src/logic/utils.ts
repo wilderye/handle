@@ -1,4 +1,4 @@
-import { getPinyin, toSimplified } from './idioms'
+import { getPinyin, toSimplified } from './idioms.js'
 import type { MatchResult, ParsedChar } from './types'
 
 // 拼音声母列表

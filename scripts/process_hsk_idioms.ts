@@ -20,7 +20,7 @@ for (let i = 1; i < lines.length; i++) { // Skip header
 
   // Simple CSV parsing (assuming no commas in the idiom itself)
   const parts = line.split(',')
-  let idiom = parts[0].trim()
+  const idiom = parts[0].trim()
 
   // Filter non-Chinese characters to check length
   const chineseOnly = idiom.replace(/[^\u4e00-\u9fa5]/g, '')

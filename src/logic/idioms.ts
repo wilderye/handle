@@ -7,12 +7,12 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 // 加载成语列表
-const idiomsPath = join(__dirname, '../data/idioms.txt')
+const idiomsPath = join(__dirname, '../../src/data/idioms.txt')
 const idiomsRaw = readFileSync(idiomsPath, 'utf-8')
 export const IdiomsList = idiomsRaw.split('\n').map(i => i.trim()).filter(Boolean)
 
 // 加载多音字数据
-const polyphonesPath = join(__dirname, '../data/polyphones.json')
+const polyphonesPath = join(__dirname, '../../src/data/polyphones.json')
 const polyphonesRaw = readFileSync(polyphonesPath, 'utf-8')
 export const Polyphones: Record<string, string> = JSON.parse(polyphonesRaw)
 

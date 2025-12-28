@@ -1,7 +1,7 @@
-import { IdiomsList, checkValidIdiom, filterNonChineseChars } from '../logic/idioms'
-import type { GameState, MatchResult, ParsedChar, PlayerStats } from '../logic/types'
-import { TRIES_LIMIT, WORD_LENGTH } from '../logic/types'
-import { checkPass, getHint, parseWord, testAnswer } from '../logic/utils'
+import { IdiomsList, checkValidIdiom, filterNonChineseChars } from '../logic/idioms.js'
+import type { GameState, MatchResult, ParsedChar, PlayerStats } from '../logic/types.js'
+import { TRIES_LIMIT, WORD_LENGTH } from '../logic/types.js'
+import { checkPass, getHint, parseWord, testAnswer } from '../logic/utils.js'
 
 // 游戏状态存储（频道ID -> 游戏状态）
 const games = new Map<string, GameState>()

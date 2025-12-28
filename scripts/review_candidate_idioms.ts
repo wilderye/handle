@@ -37,7 +37,7 @@ const flagged: FlaggedIdiom[] = []
 
 for (const idiom of idioms) {
   let score = 0
-  let reasons: string[] = []
+  const reasons: string[] = []
 
   // 1. Check character rarity
   let maxRank = 0
