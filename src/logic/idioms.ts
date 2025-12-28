@@ -6,10 +6,15 @@ import { fileURLToPath } from 'url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-// 加载成语列表
+// 加载成语列表（抽题用，只包含常见成语）
 const idiomsPath = join(__dirname, '../../src/data/idioms.txt')
 const idiomsRaw = readFileSync(idiomsPath, 'utf-8')
 export const IdiomsList = idiomsRaw.split('\n').map(i => i.trim()).filter(Boolean)
+
+// 加载完整成语列表（输入验证用，包含更多成语）
+const idiomsFullPath = join(__dirname, '../../src/data/idioms.txt.bak')
+const idiomsFullRaw = readFileSync(idiomsFullPath, 'utf-8')
+export const IdiomsListFull = idiomsFullRaw.split('\n').map(i => i.trim()).filter(Boolean)
 
 // 加载多音字数据
 const polyphonesPath = join(__dirname, '../../src/data/polyphones.json')
@@ -44,16 +49,16 @@ export function toSimplified(text: string): string {
   return Array.from(text).map(c => simplifiedMap[c] || c).join('')
 }
 
-// 获取成语信息
+// 获取成语信息（使用完整列表验证输入）
 export function getIdiom(word: string): [string, string | undefined] | undefined {
   const simplified = toSimplified(word)
   if (Polyphones[word])
     return [word, Polyphones[word]]
   if (Polyphones[simplified])
     return [word, Polyphones[simplified]]
-  if (IdiomsList.includes(word))
+  if (IdiomsListFull.includes(word))
     return [word, undefined]
-  if (IdiomsList.includes(simplified))
+  if (IdiomsListFull.includes(simplified))
     return [simplified, undefined]
   return undefined
 }
