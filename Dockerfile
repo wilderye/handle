@@ -1,14 +1,15 @@
 # Node 18 LTS + Debian Bullseye
 FROM node:18-bullseye
 
-# 安装 canvas 运行时依赖
+# 安装 canvas 编译依赖和运行时依赖
 RUN apt-get update && apt-get install -y \
-    libcairo2 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libjpeg62-turbo \
-    libgif7 \
-    librsvg2-2 \
+    build-essential \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg-dev \
+    libgif-dev \
+    librsvg2-dev \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
