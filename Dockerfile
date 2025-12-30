@@ -21,7 +21,7 @@ COPY . .
 RUN npm run build
 
 # 只保留生产依赖
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # ============ Runtime Stage ============
 FROM node:18-slim
