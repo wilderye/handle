@@ -12,6 +12,21 @@ import { commands } from "./commands/index.js";
 // 加载环境变量
 config();
 
+// ============ Cloudflare WARP 代理设置 ============
+// 当 wireproxy 运行时，所有出站流量走 Cloudflare WARP 的干净 IP
+const WARP_PROXY = process.env.WARP_PROXY || "http://127.0.0.1:1080";
+if (process.env.WARP_PRIVATE_KEY) {
+  try {
+    const { ProxyAgent, setGlobalDispatcher } = await import("undici");
+    setGlobalDispatcher(new ProxyAgent(WARP_PROXY));
+    console.log(`🛡️ WARP 代理已启用: ${WARP_PROXY}`);
+  } catch (err: any) {
+    console.warn(`⚠️ WARP 代理设置失败: ${err.message}，将使用直连`);
+  }
+} else {
+  console.log("ℹ️ 未检测到 WARP_PRIVATE_KEY，使用直连模式（本地开发）");
+}
+
 // ============ Render 保活 HTTP 服务 ============
 const PORT = parseInt(process.env.PORT || "10000", 10);
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL; // Render 自动注入的外部 URL

@@ -10,6 +10,11 @@ dist/
 .env.*.local
 PRIVATE.md
 
+# WARP 配置 (含私钥，不可提交)
+wgcf-account.toml
+wgcf-profile.conf
+wgcf.exe
+
 # 日志
 *.log
 npm-debug.log*
