@@ -45,4 +45,6 @@ COPY --from=builder /app/package.json ./
 COPY --from=builder /app/src/data ./src/data
 COPY --from=builder /app/src/assets ./src/assets
 
+EXPOSE 10000
+
 CMD ["node", "dist/index.js"]
