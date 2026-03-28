@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: handle-discord-bot
+    runtime: docker
+    plan: free
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false  # 需要在 Render Dashboard 手动填入
+      - key: DISCORD_CLIENT_ID
+        sync: false

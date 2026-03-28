@@ -6,10 +6,39 @@ import {
   GatewayIntentBits,
 } from "discord.js";
 import { config } from "dotenv";
+import { createServer } from "node:http";
 import { commands } from "./commands/index.js";
 
 // 加载环境变量
 config();
+
+// ============ Render 保活 HTTP 服务 ============
+const PORT = parseInt(process.env.PORT || "10000", 10);
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL; // Render 自动注入的外部 URL
+
+const server = createServer((_req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("OK");
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐 保活 HTTP 服务已启动，端口: ${PORT}`);
+
+  // 每 13 分钟 ping 自己，防止 Render 15 分钟无流量休眠
+  if (RENDER_EXTERNAL_URL) {
+    setInterval(async () => {
+      try {
+        await fetch(`${RENDER_EXTERNAL_URL}/keepalive`);
+        console.log("💓 保活 ping 成功");
+      } catch {
+        console.warn("⚠️ 保活 ping 失败");
+      }
+    }, 5 * 60 * 1000); // 5 分钟
+    console.log(`💓 保活定时器已启动，每 5 分钟 ping: ${RENDER_EXTERNAL_URL}`);
+  } else {
+    console.log("ℹ️ 未检测到 RENDER_EXTERNAL_URL，保活定时器未启动（本地开发模式）");
+  }
+});
 
 // 扩展 Client 类型以包含 commands 属性
 declare module "discord.js" {
