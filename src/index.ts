@@ -132,6 +132,19 @@ client.on("error", (err) => console.error(`[Discord 错误]`, err));
 
 console.log("🔄 正在连接 Discord...");
 
+// 网络诊断：测试能否访问 Discord API
+console.log("🔍 [诊断] 测试出站网络连接...");
+(async () => {
+  try {
+    const testRes = await fetch("https://discord.com/api/v10/gateway", { signal: AbortSignal.timeout(10_000) });
+    const data = await testRes.json();
+    console.log(`✅ [诊断] Discord API 可达，Gateway: ${JSON.stringify(data)}`);
+  } catch (err: any) {
+    console.error(`❌ [诊断] Discord API 不可达: ${err.message}`);
+  }
+})();
+
+
 // 设置 30 秒超时，如果连接卡住至少能看到提示
 const loginTimeout = setTimeout(() => {
   console.error("❌ Discord 登录超时（30 秒内未完成），可能是网络问题");
