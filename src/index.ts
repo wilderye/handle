@@ -120,8 +120,30 @@ if (token.length < 50) {
   console.error("⚠️ 警告：Token 长度异常短，可能填错了（客户端密钥 ≠ Bot Token）");
 }
 
-console.log("🔄 正在连接 Discord...");
-client.login(token).catch((error) => {
-  console.error("❌ 登录失败：", error.message);
-  process.exit(1);
+// 调试事件：监听 Discord.js 内部状态
+client.on("debug", (msg) => {
+  // 只打印关键的连接相关日志，过滤掉心跳噪音
+  if (msg.includes("Manager") || msg.includes("Gate") || msg.includes("Shard") || msg.includes("connect") || msg.includes("error")) {
+    console.log(`[Discord 调试] ${msg}`);
+  }
 });
+client.on("warn", (msg) => console.warn(`[Discord 警告] ${msg}`));
+client.on("error", (err) => console.error(`[Discord 错误]`, err));
+
+console.log("🔄 正在连接 Discord...");
+
+// 设置 30 秒超时，如果连接卡住至少能看到提示
+const loginTimeout = setTimeout(() => {
+  console.error("❌ Discord 登录超时（30 秒内未完成），可能是网络问题");
+}, 30_000);
+
+client.login(token)
+  .then(() => {
+    clearTimeout(loginTimeout);
+    console.log("✅ Discord login() Promise 已 resolve");
+  })
+  .catch((error) => {
+    clearTimeout(loginTimeout);
+    console.error("❌ 登录失败：", error.message);
+    process.exit(1);
+  });
