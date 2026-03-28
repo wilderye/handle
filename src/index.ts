@@ -137,10 +137,10 @@ console.log("🔍 [诊断] 测试出站网络连接...");
 (async () => {
   try {
     const testRes = await fetch("https://discord.com/api/v10/gateway", { signal: AbortSignal.timeout(10_000) });
-    const data = await testRes.json();
-    console.log(`✅ [诊断] Discord API 可达，Gateway: ${JSON.stringify(data)}`);
+    const body = await testRes.text();
+    console.log(`🔍 [诊断] HTTP ${testRes.status} | 响应前500字符: ${body.substring(0, 500)}`);
   } catch (err: any) {
-    console.error(`❌ [诊断] Discord API 不可达: ${err.message}`);
+    console.error(`❌ [诊断] 请求失败: ${err.message}`);
   }
 })();
 
