@@ -113,6 +113,14 @@ if (!token) {
   process.exit(1);
 }
 
+// 诊断日志：检查 Token 格式（不会泄露完整 Token）
+console.log(`🔑 DISCORD_TOKEN 已读取，长度: ${token.length}，前缀: ${token.substring(0, 5)}...`);
+
+if (token.length < 50) {
+  console.error("⚠️ 警告：Token 长度异常短，可能填错了（客户端密钥 ≠ Bot Token）");
+}
+
+console.log("🔄 正在连接 Discord...");
 client.login(token).catch((error) => {
   console.error("❌ 登录失败：", error.message);
   process.exit(1);
