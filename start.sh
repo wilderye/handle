@@ -16,22 +16,20 @@ echo ""
 # ============ 检查 wireproxy 是否存在 ============
 echo "📋 wireproxy 检查:"
 if [ -f /usr/local/bin/wireproxy ]; then
-  echo "  二进制文件: ✅ 存在 (/usr/local/bin/wireproxy)"
-  echo "  版本: $(/usr/local/bin/wireproxy --version 2>&1 || echo '(无法获取版本)')"
+  echo "  二进制文件: ✅ 存在"
+  echo "  版本: $(/usr/local/bin/wireproxy --version 2>&1 || echo '(无法获取)')"
 else
-  echo "  二进制文件: ❌ 不存在！Docker 镜像构建可能有问题"
+  echo "  二进制文件: ❌ 不存在！"
 fi
 echo ""
 
 # ============ 生成 wireproxy 配置 ============
 if [ -z "$WARP_PRIVATE_KEY" ]; then
-  echo "⚠️ 未设置 WARP_PRIVATE_KEY 环境变量"
-  echo "   → 请在 Render Dashboard → Environment 中添加此变量"
-  echo "   → 跳过 WARP 代理，以直连模式启动（可能被 Discord 拦截）"
-  echo ""
+  echo "⚠️ 未设置 WARP_PRIVATE_KEY → 跳过 WARP，直连模式"
   exec node dist/index.js
 fi
 
+# 注意：HTTP 代理段名必须是小写 [http]，不是 [HTTPProxy]
 cat > /tmp/wireproxy.conf << EOF
 [Interface]
 PrivateKey = ${WARP_PRIVATE_KEY}
@@ -43,47 +41,57 @@ PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
 AllowedIPs = 0.0.0.0/0
 Endpoint = engage.cloudflareclient.com:2408
 
-[HTTPProxy]
+[http]
 BindAddress = 127.0.0.1:1080
 EOF
 
-echo "🔧 wireproxy 配置已生成 (/tmp/wireproxy.conf)"
-echo "   模式: HTTP 代理"
-echo "   监听: 127.0.0.1:1080"
-echo ""
+echo "🔧 配置已生成 (模式: [http] 代理, 端口: 1080)"
 
 # ============ 启动 wireproxy ============
 echo "⏳ 正在启动 wireproxy..."
 /usr/local/bin/wireproxy -c /tmp/wireproxy.conf &
 WIREPROXY_PID=$!
-echo "   PID: $WIREPROXY_PID"
+echo "  PID: $WIREPROXY_PID"
 
-# 等待代理就绪
-echo "⏳ 等待 WARP 隧道建立 (5秒)..."
-sleep 5
-
-# 检测代理是否存活
-if kill -0 $WIREPROXY_PID 2>/dev/null; then
-  echo "✅ wireproxy 进程存活 (PID: $WIREPROXY_PID)"
-  
-  # 通过代理测试出站连通性
-  echo "🔍 测试 WARP 代理连通性..."
-  TEST_RESULT=$(curl -s --max-time 10 --proxy http://127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace 2>&1) || true
-  if echo "$TEST_RESULT" | grep -q "warp=on"; then
-    echo "✅ WARP 隧道已激活！流量走 Cloudflare 网络"
-    echo "   $(echo "$TEST_RESULT" | grep 'ip=')"
-    echo "   $(echo "$TEST_RESULT" | grep 'warp=')"
-  elif [ -n "$TEST_RESULT" ]; then
-    echo "⚠️ WARP 隧道状态不确定，但代理有响应:"
-    echo "   $(echo "$TEST_RESULT" | head -5)"
-  else
-    echo "⚠️ 代理无响应，但进程仍在运行，继续尝试启动 Bot..."
+# ============ 等待代理端口就绪（最多 30 秒）============
+echo "⏳ 等待 HTTP 代理端口 1080 就绪..."
+READY=0
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  if curl -s --max-time 2 --proxy http://127.0.0.1:1080 http://example.com > /dev/null 2>&1; then
+    READY=1
+    echo "  ✅ 代理端口就绪！(第 ${i} 秒)"
+    break
   fi
-else
-  echo "❌ wireproxy 启动失败（进程已退出）"
-  echo "   可能原因: 私钥错误、网络不通、配置格式问题"
-  echo "   回退到直连模式..."
+  # 检查进程是否还活着
+  if ! kill -0 $WIREPROXY_PID 2>/dev/null; then
+    echo "  ❌ wireproxy 进程已退出！"
+    break
+  fi
+  sleep 1
+done
+
+if [ $READY -eq 0 ]; then
+  echo "❌ 代理端口 30 秒内未就绪"
+  if kill -0 $WIREPROXY_PID 2>/dev/null; then
+    echo "  wireproxy 进程仍在运行但代理未监听，可能是配置错误"
+  fi
+  echo "  回退到直连模式..."
+  echo ""
   exec node dist/index.js
+fi
+
+# ============ 测试 WARP 连通性 ============
+echo "🔍 测试 WARP 隧道状态..."
+TRACE=$(curl -s --max-time 10 --proxy http://127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace 2>&1) || true
+if echo "$TRACE" | grep -q "warp=on"; then
+  echo "  ✅ WARP 隧道已激活！"
+  echo "  出站 IP: $(echo "$TRACE" | grep 'ip=' || echo '未知')"
+  echo "  WARP:    $(echo "$TRACE" | grep 'warp=' || echo '未知')"
+elif echo "$TRACE" | grep -q "warp="; then
+  echo "  ⚠️ WARP 状态: $(echo "$TRACE" | grep 'warp=')"
+  echo "  出站 IP: $(echo "$TRACE" | grep 'ip=' || echo '未知')"
+else
+  echo "  ⚠️ 无法确认 WARP 状态，但代理端口已通，继续启动"
 fi
 
 echo ""
