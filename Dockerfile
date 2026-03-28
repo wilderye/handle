@@ -26,7 +26,7 @@ RUN npm ci --omit=dev
 # ============ Runtime Stage ============
 FROM node:18-slim
 
-# 安装 canvas 运行时依赖 + wget（用于下载 wireproxy）
+# 安装 canvas 运行时依赖 + 工具（wget 下载 wireproxy, curl 做诊断）
 RUN apt-get update && apt-get install -y \
     libcairo2 \
     libpango-1.0-0 \
@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y \
     libgif7 \
     librsvg2-2 \
     wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 下载 wireproxy（用户态 WireGuard，提供 HTTP 代理走 Cloudflare WARP）
