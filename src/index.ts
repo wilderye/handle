@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import { commands } from "./commands/index.js";
 import { initSoupDB } from "./game/soup-db.js";
 import { handleReactionAdd, handleReactionRemove } from "./game/soup-reactions.js";
+import { handleSoupButton } from "./commands/soup.js";
 
 // 加载环境变量
 config();
@@ -102,8 +103,18 @@ client.once(Events.ClientReady, async (readyClient) => {
   // await warmupBrowser()
 });
 
-// 处理斜杠命令
+// 处理斜杠命令与按钮交互
 client.on(Events.InteractionCreate, async (interaction) => {
+  // 海龟汤翻页按钮
+  if (interaction.isButton() && interaction.customId.startsWith('soup_page_')) {
+    try {
+      await handleSoupButton(interaction);
+    } catch (error) {
+      console.error('❌ 处理海龟汤翻页按钮时出错:', error);
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);

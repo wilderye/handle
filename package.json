@@ -12,15 +12,15 @@
   },
   "dependencies": {
     "canvas": "^3.2.0",
-    "discord.js": "^14.16.3",
+    "discord.js": "^14.26.4",
     "dotenv": "^16.4.7",
     "pg": "^8.11.3",
     "pinyin": "^4.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.2",
-    "tsx": "^4.19.2",
     "@types/node": "^22.10.2",
-    "@types/pg": "^8.11.2"
+    "@types/pg": "^8.11.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }
