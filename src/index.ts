@@ -4,13 +4,19 @@ import {
   Collection,
   Events,
   GatewayIntentBits,
+  Partials,
 } from "discord.js";
 import { config } from "dotenv";
 import { createServer } from "node:http";
 import { commands } from "./commands/index.js";
+import { initSoupDB } from "./game/soup-db.js";
+import { handleReactionAdd, handleReactionRemove } from "./game/soup-reactions.js";
 
 // 加载环境变量
 config();
+
+// 初始化海龟汤数据库
+await initSoupDB();
 
 // ============ Cloudflare WARP 代理设置 ============
 // 当 wireproxy 运行时，所有出站流量走 Cloudflare WARP 的干净 IP
@@ -68,6 +74,12 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions,
+  ],
+  partials: [
+    Partials.Message,
+    Partials.Reaction,
+    Partials.User,
   ],
 });
 
@@ -118,6 +130,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // 交互可能已过期，忽略错误
       console.error("⚠️ 无法回复错误消息（交互可能已过期）");
     }
+  }
+});
+
+// 监听海龟汤 Reaction 事件
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  try {
+    await handleReactionAdd(reaction, user);
+  } catch (error) {
+    console.error("Error handling MessageReactionAdd:", error);
+  }
+});
+
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  try {
+    await handleReactionRemove(reaction, user);
+  } catch (error) {
+    console.error("Error handling MessageReactionRemove:", error);
   }
 });
 
