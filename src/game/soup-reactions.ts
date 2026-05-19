@@ -1,13 +1,15 @@
 import { MessageReaction, User, PartialMessageReaction, PartialUser } from 'discord.js';
 import { getSoupDB } from './soup-db.js';
 
-export const CORE_EMOJIS: Record<string, 'yes' | 'no' | 'yes_and_no' | 'irrelevant' | 'highlight'> = {
+export const CORE_EMOJIS: Record<string, 'yes' | 'no' | 'yes_and_no' | 'irrelevant'> = {
   '✅': 'yes',
   '❌': 'no',
   '⭕': 'yes_and_no',
   '🚫': 'irrelevant',
-  '📌': 'highlight'
 };
+
+// 📌 不归档，而是直接 pin 消息
+const PIN_EMOJI = '📌';
 
 export const IMPORTANT_EMOJIS = new Set(['❗', '‼️']);
 
@@ -58,7 +60,18 @@ export async function handleReactionAdd(
 
   const content = message.content || '';
 
-  // Case 1: Core emoji added
+  // Case 1: 📌 → pin 消息
+  if (emojiName === PIN_EMOJI) {
+    try {
+      await message.pin();
+      console.log(`📌 [Soup] Pinned message: "${content}"`);
+    } catch (e: any) {
+      console.error(`📌 [Soup] Failed to pin message: ${e.message}`);
+    }
+    return;
+  }
+
+  // Case 2: Core emoji added → 归档判定
   if (emojiName in CORE_EMOJIS) {
     const answerType = CORE_EMOJIS[emojiName];
 
@@ -66,7 +79,6 @@ export async function handleReactionAdd(
     let isImportant = false;
     for (const [_, msgReaction] of message.reactions.cache.entries()) {
       if (msgReaction.emoji.name && IMPORTANT_EMOJIS.has(msgReaction.emoji.name)) {
-        // Check if host reacted with this exclamation emoji
         const users = await msgReaction.users.fetch();
         if (users.has(game.hostId)) {
           isImportant = true;
@@ -86,7 +98,7 @@ export async function handleReactionAdd(
     console.log(`📝 [Soup] Archived question: "${content}" as ${answerType} (important: ${isImportant})`);
   }
 
-  // Case 2: Important emoji added
+  // Case 3: Important emoji added
   if (IMPORTANT_EMOJIS.has(emojiName)) {
     const question = await db.getQuestion(messageId);
     if (question) {
@@ -135,11 +147,21 @@ export async function handleReactionRemove(
   const message = reaction.message;
   const messageId = message.id;
 
-  // Case 1: Core emoji removed
+  // Case 1: 📌 removed → unpin 消息
+  if (emojiName === PIN_EMOJI) {
+    try {
+      await message.unpin();
+      console.log(`📌 [Soup] Unpinned message`);
+    } catch (e: any) {
+      console.error(`📌 [Soup] Failed to unpin message: ${e.message}`);
+    }
+    return;
+  }
+
+  // Case 2: Core emoji removed
   if (emojiName in CORE_EMOJIS) {
-    // Check if there are other core emojis from the host
     let nextCoreEmoji: string | null = null;
-    let nextAnswerType: 'yes' | 'no' | 'yes_and_no' | 'irrelevant' | 'highlight' | null = null;
+    let nextAnswerType: 'yes' | 'no' | 'yes_and_no' | 'irrelevant' | null = null;
 
     for (const [_, msgReaction] of message.reactions.cache.entries()) {
       const name = msgReaction.emoji.name;
@@ -154,7 +176,6 @@ export async function handleReactionRemove(
     }
 
     if (nextAnswerType && nextCoreEmoji) {
-      // Update to the next active core emoji
       const question = await db.getQuestion(messageId);
       if (question) {
         await db.addOrUpdateQuestion({
@@ -168,7 +189,6 @@ export async function handleReactionRemove(
         console.log(`📝 [Soup] Updated question to next emoji ${nextCoreEmoji}`);
       }
     } else {
-      // No more core emojis from host, remove from archive!
       await db.deleteQuestion(messageId);
       console.log(`📝 [Soup] Removed question from archive (no more core emojis)`);
     }

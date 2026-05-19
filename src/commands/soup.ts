@@ -31,15 +31,14 @@ const ANSWER_TYPES: Record<string, { label: string; emoji: string }> = {
   no:          { label: '不是',   emoji: '❌' },
   yes_and_no:  { label: '是也不是', emoji: '⭕' },
   irrelevant:  { label: '无关',   emoji: '🚫' },
-  highlight:   { label: '线索',   emoji: '📌' },
 };
 const PER_PAGE = 8;
 
 // ── V2 组件工厂 ──
 const text = (content: string) => ({ type: 10, content });
 const sep  = ()                => ({ type: 14, divider: true, spacing: 1 });
-const container = (color: number, children: any[]) => ({
-  type: 17, accent_color: color, components: children,
+const box = (children: any[]) => ({
+  type: 17, components: children,
 });
 const pageButtons = (page: number, total: number, uid: string) => ({
   type: 1,
@@ -60,10 +59,20 @@ async function resolveDisplayName(interaction: any, userId: string): Promise<str
   } catch { return '未知'; }
 }
 
+// ── 辅助：通过名称查找身份组（先 fetch 确保缓存） ──
+async function findRoleByName(guild: any, name: string) {
+  let role = guild.roles.cache.find((r: any) => r.name === name);
+  if (!role) {
+    await guild.roles.fetch();
+    role = guild.roles.cache.find((r: any) => r.name === name);
+  }
+  return role ?? null;
+}
+
 // ── 构建历史页面 ──
 async function buildHistoryPage(interaction: any, questions: any[], page: number, total: number) {
   if (questions.length === 0) {
-    return container(0xf39c12, [text('### 📋 判定记录\n暂无记录。')]);
+    return box([text('### 📋 判定记录\n暂无记录。')]);
   }
   const start = (page - 1) * PER_PAGE;
   const slice = questions.slice(start, start + PER_PAGE);
@@ -75,7 +84,7 @@ async function buildHistoryPage(interaction: any, questions: any[], page: number
     const important = q.isImportant ? ' 🔥' : '';
     lines += `${start + i + 1}. **${name}**：${q.content} → ${t.emoji} ${t.label}${important}\n`;
   }
-  return container(0xf39c12, [
+  return box([
     text(`### 📋 判定记录 (${page}/${total})\n${lines}`),
   ]);
 }
@@ -101,25 +110,30 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     let roleMsg = '';
     const guild = interaction.guild;
     if (guild) {
-      let role = guild.roles.cache.find(r => r.name === '海龟汤主持人');
+      let role = await findRoleByName(guild, '海龟汤主持人');
       if (!role && guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
         try {
           role = await guild.roles.create({ name: '海龟汤主持人', color: 0xf1c40f, reason: '海龟汤游戏' });
         } catch (e: any) { roleMsg = `\n⚠️ 无法创建身份组：${e.message}`; }
       }
       if (role) {
-        const member = await guild.members.fetch(interaction.user.id).catch(() => null);
-        if (member) {
-          await member.roles.add(role).catch((e: any) => { roleMsg = `\n⚠️ 无法赋予身份组：${e.message}`; });
+        const botMember = guild.members.me;
+        if (botMember && botMember.roles.highest.position <= role.position) {
+          roleMsg = '\n⚠️ Bot 的角色层级低于「海龟汤主持人」，请在服务器设置中将 Bot 角色拖到该身份组上方。';
+        } else {
+          const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+          if (member) {
+            await member.roles.add(role).catch((e: any) => { roleMsg = `\n⚠️ 无法赋予身份组：${e.message}`; });
+          }
         }
       } else if (!roleMsg) {
-        roleMsg = '\n⚠️ 未找到"海龟汤主持人"身份组，且 Bot 无权创建。';
+        roleMsg = '\n⚠️ 未找到「海龟汤主持人」身份组，且 Bot 无权创建。请手动创建或给予 Bot「管理角色」权限。';
       }
     }
 
     await interaction.reply({
-      components: [container(0x2ecc71, [
-        text(`## 🍲 海龟汤开局\n\n> ${riddle.replace(/\n/g, '\n> ')}\n\n汤主：<@${interaction.user.id}>\n表情判定：✅是 ❌不是 ⭕是也不是 🚫无关 📌线索${roleMsg}`),
+      components: [box([
+        text(`## 🍲 海龟汤开局\n\n> ${riddle.replace(/\n/g, '\n> ')}\n\n汤主：<@${interaction.user.id}>\n表情判定：✅是 ❌不是 ⭕是也不是 🚫无关 📌标注${roleMsg}`),
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
@@ -132,7 +146,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     if (!game) { await interaction.reply({ content: '❌ 当前没有进行中的海龟汤。', ephemeral: true }); return; }
 
     await interaction.reply({
-      components: [container(0x3498db, [
+      components: [box([
         text(`## 🍲 汤面\n\n> ${game.riddle.replace(/\n/g, '\n> ')}`),
       ])],
       flags: MessageFlags.IsComponentsV2,
@@ -145,13 +159,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const game = await db.getGame(ch);
     if (!game) { await interaction.reply({ content: '❌ 当前没有进行中的海龟汤。', ephemeral: true }); return; }
 
-    // 手动 defer（discord.js deferReply 类型不支持 IsComponentsV2）
-    const appId = interaction.client.application?.id ?? interaction.client.user?.id;
-    await interaction.client.rest.post(
-      `/interactions/${interaction.id}/${interaction.token}/callback`,
-      { body: { type: 5, data: { flags: 1 << 15 } } }
-    );
-
+    // 直接构建并回复，不 defer（避免 REST defer 导致的"正在响应"死锁）
     const questions = await db.getQuestionsForGame(ch);
     const totalPages = Math.max(1, Math.ceil(questions.length / PER_PAGE));
     const uid = interaction.user.id;
@@ -159,21 +167,33 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const components: any[] = [histContainer];
     if (totalPages > 1) components.push(pageButtons(1, totalPages, uid));
 
-    await interaction.client.rest.patch(
-      `/webhooks/${appId}/${interaction.token}/messages/@original`,
-      { body: { components } }
-    );
+    await interaction.reply({
+      components,
+      flags: MessageFlags.IsComponentsV2,
+    });
     return;
   }
 
-  // ── 开汤通知 ──
+  // ── 开汤通知（仅汤主可用） ──
   if (sub === '开汤通知') {
     const game = await db.getGame(ch);
     if (!game) { await interaction.reply({ content: '❌ 当前没有进行中的海龟汤。', ephemeral: true }); return; }
 
-    const role = interaction.guild?.roles.cache.find(r => r.name === '喝汤人');
-    const ping = role ? `<@&${role.id}>` : '@喝汤人';
-    await interaction.reply({ content: `📢 ${ping} 海龟汤开局了，快来提问！` });
+    if (interaction.user.id !== game.hostId) {
+      await interaction.reply({ content: '❌ 只有汤主可以发送开汤通知。', ephemeral: true });
+      return;
+    }
+
+    const guild = interaction.guild;
+    let role = null;
+    if (guild) {
+      role = await findRoleByName(guild, '喝汤人');
+    }
+    if (!role) {
+      await interaction.reply({ content: '⚠️ 未找到「喝汤人」身份组，请先在服务器设置中创建。', ephemeral: true });
+      return;
+    }
+    await interaction.reply({ content: `📢 <@&${role.id}> 海龟汤开局了，快来提问！` });
     return;
   }
 
@@ -192,16 +212,18 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await db.deleteGame(ch);
 
     // 移除身份组
-    const role = interaction.guild?.roles.cache.find(r => r.name === '海龟汤主持人');
-    if (role) {
-      const host = await interaction.guild?.members.fetch(game.hostId).catch(() => null);
-      if (host) await host.roles.remove(role).catch(() => {});
+    if (interaction.guild) {
+      const role = await findRoleByName(interaction.guild, '海龟汤主持人');
+      if (role) {
+        const host = await interaction.guild.members.fetch(game.hostId).catch(() => null);
+        if (host) await host.roles.remove(role).catch(() => {});
+      }
     }
 
     const answer = interaction.options.getString('汤底') || '（未公布）';
 
     await interaction.reply({
-      components: [container(0x9b59b6, [
+      components: [box([
         text(`## 🏁 海龟汤结束\n\n**汤面：**\n> ${game.riddle.replace(/\n/g, '\n> ')}\n\n**汤底：**\n> ${answer.replace(/\n/g, '\n> ')}\n\n感谢各位参与！`),
       ])],
       flags: MessageFlags.IsComponentsV2,
@@ -212,12 +234,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   // ── 帮助 ──
   if (sub === '帮助') {
     await interaction.reply({
-      components: [container(0x1d9c9c, [
+      components: [box([
         text(`## 🐢 海龟汤玩法\n\n汤主出谜面，喝汤人提问，汤主用表情判定。`),
         sep(),
         text(`### 指令\n\`/海龟汤 开始 [汤面]\` 开局\n\`/海龟汤 查看汤面\` 看汤面\n\`/海龟汤 查看猜测历史\` 看判定记录\n\`/海龟汤 开汤通知\` 通知喝汤人\n\`/海龟汤 结束 [汤底]\` 结局\n\`/海龟汤 帮助\` 本说明`),
         sep(),
-        text(`### 表情判定\n汤主在玩家提问消息下贴表情即可：\n✅ 是　❌ 不是　⭕ 是也不是　🚫 无关　📌 线索\n附加 ❗ 或 ‼️ → 标记为**重要线索**`),
+        text(`### 表情判定\n汤主在玩家提问消息下贴表情即可：\n✅ 是　❌ 不是　⭕ 是也不是　🚫 无关　📌 标注消息\n附加 ❗ 或 ‼️ → 标记为**重要**`),
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
@@ -243,7 +265,7 @@ export async function handleSoupButton(interaction: ButtonInteraction) {
   const game = await db.getGame(interaction.channelId);
   if (!game) {
     await interaction.editReply({
-      components: [container(0x95a5a6, [text('### 📋 判定记录\n游戏已结束。')])],
+      components: [box([text('### 📋 判定记录\n游戏已结束。')])],
     });
     return;
   }
