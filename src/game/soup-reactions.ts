@@ -17,12 +17,14 @@ export async function handleReactionAdd(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser
 ) {
+  console.log(`[Soup-Reaction] 收到反应事件! emoji=${reaction.emoji.name}, userId=${user.id}, partial=${reaction.partial}`);
+
   // If partial, fetch it
   if (reaction.partial) {
     try {
       await reaction.fetch();
     } catch (error) {
-      console.error('Failed to fetch reaction:', error);
+      console.error('[Soup-Reaction] Failed to fetch reaction:', error);
       return;
     }
   }
@@ -31,34 +33,37 @@ export async function handleReactionAdd(
     try {
       await reaction.message.fetch();
     } catch (error) {
-      console.error('Failed to fetch message:', error);
+      console.error('[Soup-Reaction] Failed to fetch message:', error);
       return;
     }
   }
 
   const emojiName = reaction.emoji.name;
-  if (!emojiName) return;
+  if (!emojiName) { console.log('[Soup-Reaction] 退出: emojiName 为空'); return; }
 
   const channelId = reaction.message.channelId;
   const db = getSoupDB();
   const game = await db.getGame(channelId);
 
   // Check if there is an active soup game in this channel
-  if (!game) return;
+  if (!game) { console.log(`[Soup-Reaction] 退出: 频道 ${channelId} 没有进行中的游戏`); return; }
+
+  console.log(`[Soup-Reaction] 找到游戏, hostId=${game.hostId}, reactorId=${user.id}`);
 
   // Only host's reaction matters!
-  if (user.id !== game.hostId) return;
+  if (user.id !== game.hostId) { console.log(`[Soup-Reaction] 退出: 反应者不是汤主 (${user.id} !== ${game.hostId})`); return; }
 
   const message = reaction.message;
   const messageId = message.id;
 
   // Enforce that player asked this (host cannot archive their own question/statements)
   const authorId = message.author?.id;
-  if (!authorId) return;
-  if (authorId === game.hostId) return;
-  if (message.author?.bot) return;
+  if (!authorId) { console.log('[Soup-Reaction] 退出: 消息没有 author'); return; }
+  if (authorId === game.hostId) { console.log('[Soup-Reaction] 退出: 汤主不能对自己的消息判定'); return; }
+  if (message.author?.bot) { console.log('[Soup-Reaction] 退出: 消息作者是 bot'); return; }
 
   const content = message.content || '';
+  console.log(`[Soup-Reaction] 通过所有检查! emoji=${emojiName}, content="${content}", author=${authorId}`);
 
   // Case 1: 📌 → pin 消息
   if (emojiName === PIN_EMOJI) {
@@ -96,6 +101,8 @@ export async function handleReactionAdd(
       isImportant
     });
     console.log(`📝 [Soup] Archived question: "${content}" as ${answerType} (important: ${isImportant})`);
+  } else {
+    console.log(`[Soup-Reaction] emoji "${emojiName}" 不在 CORE_EMOJIS 中，跳过归档`);
   }
 
   // Case 3: Important emoji added
@@ -112,12 +119,13 @@ export async function handleReactionRemove(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser
 ) {
+  console.log(`[Soup-Reaction-Remove] 收到移除反应事件! emoji=${reaction.emoji.name}, userId=${user.id}, partial=${reaction.partial}`);
   // If partial, fetch it
   if (reaction.partial) {
     try {
       await reaction.fetch();
     } catch (error) {
-      console.error('Failed to fetch reaction:', error);
+      console.error('[Soup-Reaction-Remove] Failed to fetch reaction:', error);
       return;
     }
   }
@@ -126,26 +134,28 @@ export async function handleReactionRemove(
     try {
       await reaction.message.fetch();
     } catch (error) {
-      console.error('Failed to fetch message:', error);
+      console.error('[Soup-Reaction-Remove] Failed to fetch message:', error);
       return;
     }
   }
 
   const emojiName = reaction.emoji.name;
-  if (!emojiName) return;
+  if (!emojiName) { console.log('[Soup-Reaction-Remove] 退出: emojiName 为空'); return; }
 
   const channelId = reaction.message.channelId;
   const db = getSoupDB();
   const game = await db.getGame(channelId);
 
   // Check if there is an active soup game in this channel
-  if (!game) return;
+  if (!game) { console.log(`[Soup-Reaction-Remove] 退出: 频道 ${channelId} 没有进行中的游戏`); return; }
 
   // Only host's reaction matters!
-  if (user.id !== game.hostId) return;
+  if (user.id !== game.hostId) { console.log(`[Soup-Reaction-Remove] 退出: 反应者不是汤主 (${user.id} !== ${game.hostId})`); return; }
 
   const message = reaction.message;
   const messageId = message.id;
+
+  console.log(`[Soup-Reaction-Remove] 验证通过! emoji=${emojiName}, messageId=${messageId}`);
 
   // Case 1: 📌 removed → unpin 消息
   if (emojiName === PIN_EMOJI) {

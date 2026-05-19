@@ -142,8 +142,16 @@ export async function execute(interaction: ChatInputCommandInteraction) {
           try {
             const member = await guild.members.fetch(interaction.user.id);
             console.log(`[Soup] 准备给 ${member.user.tag} 添加身份组 ${role.id}`);
-            await member.roles.add(role, '海龟汤开局');
-            console.log(`[Soup] 身份组赋予成功`);
+            console.log(`[Soup] 赋予前角色列表: ${member.roles.cache.map(r => r.name).join(', ')}`);
+            // 直接用 role ID 字符串而非 role 对象
+            await member.roles.add(role.id, '海龟汤开局');
+            // 验证是否真的成功
+            const verified = await guild.members.fetch({ user: interaction.user.id, force: true });
+            const hasRole = verified.roles.cache.has(role.id);
+            console.log(`[Soup] 赋予后验证: hasRole=${hasRole}, 角色列表: ${verified.roles.cache.map(r => r.name).join(', ')}`);
+            if (!hasRole) {
+              roleMsg = '\n⚠️ 身份组赋予API无报错但未生效，请检查 Bot 的「管理身份组」权限。';
+            }
           } catch (e: any) {
             console.error(`[Soup] 身份组赋予失败:`, e);
             roleMsg = `\n⚠️ 无法赋予身份组：${e.message}`;
@@ -197,13 +205,16 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  // ── 开汤通知（仅汤主可用） ──
+  // ── 开汤通知（仅持有「海龟汤主持人」身份组可用） ──
   if (sub === '开汤通知') {
     const game = await db.getGame(ch);
     if (!game) { await interaction.reply({ content: '❌ 当前没有进行中的海龟汤。', ephemeral: true }); return; }
 
-    if (interaction.user.id !== game.hostId) {
-      await interaction.reply({ content: '❌ 只有汤主可以发送开汤通知。', ephemeral: true });
+    // 检查身份组而非数据库记录
+    const member = interaction.member as any;
+    const hasHostRole = member?.roles?.cache?.some((r: any) => r.name === '海龟汤主持人');
+    if (!hasHostRole) {
+      await interaction.reply({ content: '❌ 只有持有「海龟汤主持人」身份组的人可以发送开汤通知。', ephemeral: true });
       return;
     }
 
