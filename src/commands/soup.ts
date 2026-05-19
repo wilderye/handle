@@ -110,20 +110,43 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     let roleMsg = '';
     const guild = interaction.guild;
     if (guild) {
-      let role = await findRoleByName(guild, '海龟汤主持人');
-      if (!role && guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
-        try {
-          role = await guild.roles.create({ name: '海龟汤主持人', color: 0xf1c40f, reason: '海龟汤游戏' });
-        } catch (e: any) { roleMsg = `\n⚠️ 无法创建身份组：${e.message}`; }
+      console.log(`[Soup] 开始身份组流程. guild=${guild.id}, user=${interaction.user.id}`);
+      
+      // 先刷新角色缓存
+      const allRoles = await guild.roles.fetch();
+      console.log(`[Soup] 已获取 ${allRoles.size} 个身份组: ${allRoles.map(r => `${r.name}(${r.id})`).join(', ')}`);
+      
+      let role = allRoles.find(r => r.name === '海龟汤主持人') ?? null;
+      console.log(`[Soup] 查找"海龟汤主持人": ${role ? `找到 id=${role.id} pos=${role.position}` : '未找到'}`);
+      
+      if (!role) {
+        const hasManageRoles = guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles);
+        console.log(`[Soup] Bot 有 ManageRoles 权限: ${hasManageRoles}`);
+        if (hasManageRoles) {
+          try {
+            role = await guild.roles.create({ name: '海龟汤主持人', color: 0xf1c40f, reason: '海龟汤游戏' });
+            console.log(`[Soup] 创建身份组成功 id=${role.id}`);
+          } catch (e: any) {
+            console.error(`[Soup] 创建身份组失败:`, e);
+            roleMsg = `\n⚠️ 无法创建身份组：${e.message}`;
+          }
+        }
       }
+      
       if (role) {
         const botMember = guild.members.me;
+        console.log(`[Soup] Bot highest role: ${botMember?.roles.highest.name}(pos=${botMember?.roles.highest.position}), target role pos=${role.position}`);
         if (botMember && botMember.roles.highest.position <= role.position) {
           roleMsg = '\n⚠️ Bot 的角色层级低于「海龟汤主持人」，请在服务器设置中将 Bot 角色拖到该身份组上方。';
         } else {
-          const member = await guild.members.fetch(interaction.user.id).catch(() => null);
-          if (member) {
-            await member.roles.add(role).catch((e: any) => { roleMsg = `\n⚠️ 无法赋予身份组：${e.message}`; });
+          try {
+            const member = await guild.members.fetch(interaction.user.id);
+            console.log(`[Soup] 准备给 ${member.user.tag} 添加身份组 ${role.id}`);
+            await member.roles.add(role, '海龟汤开局');
+            console.log(`[Soup] 身份组赋予成功`);
+          } catch (e: any) {
+            console.error(`[Soup] 身份组赋予失败:`, e);
+            roleMsg = `\n⚠️ 无法赋予身份组：${e.message}`;
           }
         }
       } else if (!roleMsg) {
