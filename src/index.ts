@@ -51,7 +51,7 @@ server.listen(PORT, () => {
     setInterval(async () => {
       try {
         await fetch(`${RENDER_EXTERNAL_URL}/keepalive`);
-        console.log("💓 保活 ping 成功");
+
       } catch {
         console.warn("⚠️ 保活 ping 失败");
       }
@@ -145,15 +145,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// 监听消息事件 (调试用)
-client.on(Events.MessageCreate, async (msg) => {
-  if (msg.author.bot) return;
-  console.log(`[MessageCreate] 收到消息: ${msg.content}, channel=${msg.channelId}`);
-});
+
 
 // 监听海龟汤 Reaction 事件
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
-  console.log(`[DEBUG-REACTION] RAW REACTION EVENT: emoji=${reaction.emoji?.name}, user=${user.id}`);
   try {
     await handleReactionAdd(reaction, user);
   } catch (error) {
@@ -176,36 +171,10 @@ if (!token) {
   process.exit(1);
 }
 
-// 诊断日志：检查 Token 格式（不会泄露完整 Token）
-console.log(`🔑 DISCORD_TOKEN 已读取，长度: ${token.length}，前缀: ${token.substring(0, 5)}...`);
-
-if (token.length < 50) {
-  console.error("⚠️ 警告：Token 长度异常短，可能填错了（客户端密钥 ≠ Bot Token）");
-}
-
-// 调试事件：监听 Discord.js 内部状态
-client.on("debug", (msg) => {
-  // 只打印关键的连接相关日志，过滤掉心跳噪音
-  if (msg.includes("Manager") || msg.includes("Gate") || msg.includes("Shard") || msg.includes("connect") || msg.includes("error")) {
-    console.log(`[Discord 调试] ${msg}`);
-  }
-});
 client.on("warn", (msg) => console.warn(`[Discord 警告] ${msg}`));
 client.on("error", (err) => console.error(`[Discord 错误]`, err));
 
 console.log("🔄 正在连接 Discord...");
-
-// 网络诊断：测试能否访问 Discord API
-console.log("🔍 [诊断] 测试出站网络连接...");
-(async () => {
-  try {
-    const testRes = await fetch("https://discord.com/api/v10/gateway", { signal: AbortSignal.timeout(10_000) });
-    const body = await testRes.text();
-    console.log(`🔍 [诊断] HTTP ${testRes.status} | 响应前500字符: ${body.substring(0, 500)}`);
-  } catch (err: any) {
-    console.error(`❌ [诊断] 请求失败: ${err.message}`);
-  }
-})();
 
 
 // 设置 30 秒超时，如果连接卡住至少能看到提示
