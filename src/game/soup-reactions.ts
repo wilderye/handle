@@ -41,6 +41,11 @@ export async function handleReactionAdd(
   const emojiName = reaction.emoji.name;
   if (!emojiName) return;
 
+  // 诊断日志：排查 ❎ 编码问题
+  const codepoints = [...emojiName].map(c => 'U+' + c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')).join(' ');
+  const inCore = emojiName in CORE_EMOJIS;
+  console.log(`[Soup-Diag] emoji="${emojiName}" codepoints=[${codepoints}] inCORE=${inCore} keys=[${Object.keys(CORE_EMOJIS).join(',')}]`);
+
   const channelId = reaction.message.channelId;
   const db = getSoupDB();
   const game = await db.getGame(channelId);
