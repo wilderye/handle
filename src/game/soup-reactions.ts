@@ -1,5 +1,5 @@
 import { MessageReaction, User, PartialMessageReaction, PartialUser } from 'discord.js';
-import { getSoupDB } from './soup-db.js';
+import { getSoupDB, hasActiveGame } from './soup-db.js';
 
 export const CORE_EMOJIS: Record<string, 'yes' | 'no' | 'yes_and_no' | 'irrelevant'> = {
   '✅': 'yes',
@@ -23,7 +23,9 @@ export async function handleReactionAdd(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser
 ) {
-  console.log(`[Soup-Add] 收到反应: emoji=${reaction.emoji.name}, userId=${user.id}`);
+  // ── O(1) 快速短路：频道无活跃游戏则直接忽略 ──
+  const channelId = reaction.message.channelId;
+  if (!hasActiveGame(channelId)) return;
 
   // If partial, fetch it
   if (reaction.partial) {
@@ -45,23 +47,14 @@ export async function handleReactionAdd(
   }
 
   const emojiName = reaction.emoji.name;
-  if (!emojiName) { console.log('[Soup-Add] 退出: emojiName 为空'); return; }
+  if (!emojiName) return;
 
-  // 诊断：打印 emoji 编码 + 是否匹配 CORE_EMOJIS
-  const inCore = emojiName in CORE_EMOJIS;
-  const coreKeysDetail = Object.keys(CORE_EMOJIS).map(k => `${k}(${emojiCodepoints(k)})`).join(', ');
-  console.log(`[Soup-Add] emoji="${emojiName}" codepoints=[${emojiCodepoints(emojiName)}] inCORE=${inCore}`);
-  console.log(`[Soup-Add] CORE_EMOJIS keys: [${coreKeysDetail}]`);
-
-  const channelId = reaction.message.channelId;
   const db = getSoupDB();
   const game = await db.getGame(channelId);
 
-  if (!game) { console.log(`[Soup-Add] 退出: 频道 ${channelId} 无游戏`); return; }
+  if (!game) return;
 
-  console.log(`[Soup-Add] 游戏存在, hostId=${game.hostId}, reactorId=${user.id}`);
-
-  if (user.id !== game.hostId) { console.log(`[Soup-Add] 退出: 非汤主`); return; }
+  if (user.id !== game.hostId) return;
 
   const message = reaction.message;
   const messageId = message.id;
@@ -80,16 +73,13 @@ export async function handleReactionAdd(
 
   // Enforce that player asked this
   const authorId = message.author?.id;
-  if (!authorId) { console.log('[Soup-Add] 退出: 消息无 author'); return; }
-  if (authorId === game.hostId) { console.log('[Soup-Add] 退出: 汤主不能判定自己'); return; }
-  if (message.author?.bot) { console.log('[Soup-Add] 退出: 作者是 bot'); return; }
-
-  console.log(`[Soup-Add] 通过检查: emoji=${emojiName}, authorId=${authorId}, content="${content.slice(0, 50)}"`);
+  if (!authorId) return;
+  if (authorId === game.hostId) return;
+  if (message.author?.bot) return;
 
   // Case 2: Core emoji added → 归档判定
   if (emojiName in CORE_EMOJIS) {
     const answerType = CORE_EMOJIS[emojiName];
-    console.log(`[Soup-Add] 匹配 CORE_EMOJIS → answerType=${answerType}`);
 
     // Check if exclamation emoji from host is also present
     let isImportant = false;
@@ -111,9 +101,7 @@ export async function handleReactionAdd(
       answerType,
       isImportant
     });
-    console.log(`[Soup-Add] ✅ 已归档: msgId=${messageId}, type=${answerType}, important=${isImportant}`);
-  } else {
-    console.log(`[Soup-Add] emoji 不在 CORE_EMOJIS 中，跳过`);
+    console.log(`[Soup] 归档: msgId=${messageId}, type=${answerType}, important=${isImportant}`);
   }
 
   // Case 3: Important emoji added
@@ -121,7 +109,6 @@ export async function handleReactionAdd(
     const question = await db.getQuestion(messageId);
     if (question) {
       await db.updateQuestionImportance(messageId, true);
-      console.log(`[Soup-Add] 标记为重要: msgId=${messageId}`);
     }
   }
 }
@@ -130,7 +117,9 @@ export async function handleReactionRemove(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser
 ) {
-  console.log(`[Soup-Remove] 收到移除: emoji=${reaction.emoji.name}, userId=${user.id}`);
+  // ── O(1) 快速短路 ──
+  const channelId = reaction.message.channelId;
+  if (!hasActiveGame(channelId)) return;
 
   // If partial, fetch it
   if (reaction.partial) {
@@ -152,14 +141,13 @@ export async function handleReactionRemove(
   }
 
   const emojiName = reaction.emoji.name;
-  if (!emojiName) { console.log('[Soup-Remove] 退出: emojiName 为空'); return; }
+  if (!emojiName) return;
 
-  const channelId = reaction.message.channelId;
   const db = getSoupDB();
   const game = await db.getGame(channelId);
 
-  if (!game) { console.log(`[Soup-Remove] 退出: 频道 ${channelId} 无游戏`); return; }
-  if (user.id !== game.hostId) { console.log(`[Soup-Remove] 退出: 非汤主`); return; }
+  if (!game) return;
+  if (user.id !== game.hostId) return;
 
   const message = reaction.message;
   const messageId = message.id;
@@ -203,11 +191,10 @@ export async function handleReactionRemove(
           answerType: nextAnswerType,
           isImportant: question.isImportant
         });
-        console.log(`[Soup-Remove] 切换到下一个 emoji: ${nextCoreEmoji}`);
+      console.log(`[Soup] 切换判定: msgId=${messageId} → ${nextCoreEmoji}`);
       }
     } else {
       await db.deleteQuestion(messageId);
-      console.log(`[Soup-Remove] 已删除归档 (无剩余 core emoji)`);
     }
   }
 

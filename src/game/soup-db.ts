@@ -1,6 +1,14 @@
 import pkg from 'pg';
 const { Pool } = pkg;
 
+// ── 活跃游戏频道缓存：避免每个 reaction 都查 DB ──
+const activeGameChannels = new Set<string>();
+
+/** O(1) 判断该频道是否有活跃海龟汤游戏 */
+export function hasActiveGame(channelId: string): boolean {
+  return activeGameChannels.has(channelId);
+}
+
 export interface SoupGame {
   channelId: string;
   hostId: string;
@@ -36,6 +44,7 @@ class MemorySoupStore {
       riddle,
       createdAt: new Date()
     });
+    activeGameChannels.add(channelId);
     return true;
   }
 
@@ -45,6 +54,7 @@ class MemorySoupStore {
 
   async deleteGame(channelId: string): Promise<boolean> {
     this.games.delete(channelId);
+    activeGameChannels.delete(channelId);
     // cascade delete questions
     for (const [msgId, q] of this.questions.entries()) {
       if (q.channelId === channelId) {
@@ -162,6 +172,7 @@ class PGSoupStore {
        ON CONFLICT (channel_id) DO UPDATE SET host_id = $2, riddle = $3, created_at = CURRENT_TIMESTAMP`,
       [channelId, hostId, riddle]
     );
+    activeGameChannels.add(channelId);
     return true;
   }
 
@@ -182,6 +193,7 @@ class PGSoupStore {
 
   async deleteGame(channelId: string): Promise<boolean> {
     await this.pool.query(`DELETE FROM soup_games WHERE channel_id = $1`, [channelId]);
+    activeGameChannels.delete(channelId);
     return true;
   }
 
@@ -284,6 +296,9 @@ export async function initSoupDB(): Promise<void> {
       await pgStore.init();
       dbInstance = pgStore;
       isPostgres = true;
+
+      // 从 DB 加载活跃游戏频道到内存缓存
+      await loadActiveGames(pgStore);
       return;
     } catch (err: any) {
       console.warn('⚠️ 数据库初始化失败，将降级至内存存储模式：', err.message);
@@ -295,6 +310,17 @@ export async function initSoupDB(): Promise<void> {
   const memStore = new MemorySoupStore();
   dbInstance = memStore;
   isPostgres = false;
+}
+
+async function loadActiveGames(store: PGSoupStore): Promise<void> {
+  // PGSoupStore 的 pool 是 private 的，通过 getGame 无法批量加载
+  // 直接用一个轻量查询获取所有活跃频道 ID
+  const res = await (store as any).pool.query('SELECT channel_id FROM soup_games');
+  activeGameChannels.clear();
+  for (const row of res.rows) {
+    activeGameChannels.add(row.channel_id);
+  }
+  console.log(`📋 已加载 ${activeGameChannels.size} 个活跃海龟汤频道到缓存`);
 }
 
 export function getSoupDB() {
