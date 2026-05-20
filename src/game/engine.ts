@@ -6,9 +6,6 @@ import { checkPass, getHint, parseWord, testAnswer } from '../logic/utils.js'
 // 游戏状态存储（频道ID -> 游戏状态）
 const games = new Map<string, GameState>()
 
-// 玩家统计存储（用户ID -> 统计数据）
-const playerStats = new Map<string, PlayerStats>()
-
 export class GameEngine {
   /**
    * 开始新游戏
@@ -127,24 +124,22 @@ export class GameEngine {
   /**
    * 结束游戏
    */
-  static endGame(channelId: string, winnerId?: string): {
+  static async endGame(channelId: string, winnerId?: string): Promise<{
     answer: string
     participants: string[]
-  } | undefined {
+  } | undefined> {
     const game = games.get(channelId)
     if (!game) return undefined
 
     const answer = game.answer
     const participants = Array.from(game.participants)
 
+    const { getSoupDB } = await import('./soup-db.js')
+    const db = getSoupDB()
+
     // 更新玩家统计
-    for (const oddsPlayedGamesId of participants) {
-      const stats = playerStats.get(oddsPlayedGamesId) || { oddsPlayedGames: 0, wonGames: 0 }
-      stats.oddsPlayedGames++
-      if (oddsPlayedGamesId === winnerId) {
-        stats.wonGames++
-      }
-      playerStats.set(oddsPlayedGamesId, stats)
+    for (const userId of participants) {
+      await db.addHandlePlayerStats(userId, userId === winnerId)
     }
 
     // 清除游戏状态
@@ -156,18 +151,21 @@ export class GameEngine {
   /**
    * 获取玩家统计
    */
-  static getPlayerStats(userId: string): {
+  static async getPlayerStats(userId: string): Promise<{
     oddsPlayedGames: number
     wonGames: number
     winRate: string
-  } {
-    const stats = playerStats.get(userId) || { oddsPlayedGames: 0, wonGames: 0 }
-    const winRate = stats.oddsPlayedGames > 0
-      ? ((stats.wonGames / stats.oddsPlayedGames) * 100).toFixed(1) + '%'
+  }> {
+    const { getSoupDB } = await import('./soup-db.js')
+    const db = getSoupDB()
+    const stats = await db.getHandlePlayerStats(userId)
+    
+    const winRate = stats.playedGames > 0
+      ? ((stats.wonGames / stats.playedGames) * 100).toFixed(1) + '%'
       : '0%'
     
     return {
-      oddsPlayedGames: stats.oddsPlayedGames,
+      oddsPlayedGames: stats.playedGames,
       wonGames: stats.wonGames,
       winRate,
     }

@@ -18,9 +18,16 @@ export interface SoupQuestion {
   createdAt: Date;
 }
 
+export interface HandleStats {
+  userId: string;
+  playedGames: number;
+  wonGames: number;
+}
+
 class MemorySoupStore {
   private games = new Map<string, SoupGame>();
   private questions = new Map<string, SoupQuestion>();
+  private handleStats = new Map<string, HandleStats>();
 
   async createGame(channelId: string, hostId: string, riddle: string): Promise<boolean> {
     this.games.set(channelId, {
@@ -78,14 +85,27 @@ class MemorySoupStore {
       .filter(q => q.channelId === channelId)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
+
+  async addHandlePlayerStats(userId: string, isWin: boolean): Promise<void> {
+    const stats = this.handleStats.get(userId) || { userId, playedGames: 0, wonGames: 0 };
+    stats.playedGames++;
+    if (isWin) stats.wonGames++;
+    this.handleStats.set(userId, stats);
+  }
+
+  async getHandlePlayerStats(userId: string): Promise<HandleStats> {
+    return this.handleStats.get(userId) || { userId, playedGames: 0, wonGames: 0 };
+  }
 }
 
 class PGSoupStore {
   private pool: any; // Type as any or pg.Pool to avoid compile issues if pg types aren't fully resolved
 
   constructor(connectionString: string) {
+    // 移除 Aiven URI 里的 ?sslmode=require，因为 pg 模块会用它覆盖底下的 ssl 配置
+    const cleanUrl = connectionString.replace('?sslmode=require', '');
     this.pool = new Pool({
-      connectionString,
+      connectionString: cleanUrl,
       ssl: {
         rejectUnauthorized: false
       }
@@ -119,7 +139,15 @@ class PGSoupStore {
         );
       `);
 
-      console.log('✅ PostgreSQL 海龟汤数据库初始化成功！');
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS handle_stats (
+          user_id VARCHAR(50) PRIMARY KEY,
+          played_games INTEGER DEFAULT 0,
+          won_games INTEGER DEFAULT 0
+        );
+      `);
+
+      console.log('✅ PostgreSQL 数据库初始化成功！');
       return true;
     } catch (err: any) {
       console.error('❌ PostgreSQL 海龟汤数据库连接/初始化失败:', err.message);
@@ -215,6 +243,32 @@ class PGSoupStore {
       isImportant: row.is_important,
       createdAt: row.created_at
     }));
+  }
+
+  async addHandlePlayerStats(userId: string, isWin: boolean): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO handle_stats (user_id, played_games, won_games)
+       VALUES ($1, 1, $2)
+       ON CONFLICT (user_id) DO UPDATE 
+       SET played_games = handle_stats.played_games + 1,
+           won_games = handle_stats.won_games + $2`,
+      [userId, isWin ? 1 : 0]
+    );
+  }
+
+  async getHandlePlayerStats(userId: string): Promise<HandleStats> {
+    const res = await this.pool.query(
+      `SELECT played_games, won_games FROM handle_stats WHERE user_id = $1`,
+      [userId]
+    );
+    if (res.rows.length === 0) {
+      return { userId, playedGames: 0, wonGames: 0 };
+    }
+    return {
+      userId,
+      playedGames: parseInt(res.rows[0].played_games, 10),
+      wonGames: parseInt(res.rows[0].won_games, 10)
+    };
   }
 }
 

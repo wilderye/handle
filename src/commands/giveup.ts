@@ -19,7 +19,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   const game = GameEngine.getGame(channelId)
   const tryCount = game?.tries.length || 0
-  const endResult = GameEngine.endGame(channelId)
+  const endResult = await GameEngine.endGame(channelId)
 
   await interaction.reply({
     content: `🏳️ **游戏已放弃**\n\n` +

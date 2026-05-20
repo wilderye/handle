@@ -57,12 +57,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     if (result.isWin) {
       // 猜中了
-      const endResult = GameEngine.endGame(channelId, userId)
+      const endResult = await GameEngine.endGame(channelId, userId)
       content += `🎉 **恭喜猜中！** 答案是：**${endResult?.answer}**\n`
       content += `用了 ${tryCount} 次猜测`
     } else if (result.isFail) {
       // 满次数失败
-      const endResult = GameEngine.endGame(channelId)
+      const endResult = await GameEngine.endGame(channelId)
       content += `😢 **游戏结束！** 已用完 ${TRIES_LIMIT} 次机会\n`
       content += `正确答案是：**${endResult?.answer}**`
     } else {
@@ -92,10 +92,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     }
 
     if (result.isWin) {
-      const endResult = GameEngine.endGame(channelId, userId)
+      const endResult = await GameEngine.endGame(channelId, userId)
       content += `🎉 **恭喜猜中！** 答案是：**${endResult?.answer}**`
     } else if (result.isFail) {
-      const endResult = GameEngine.endGame(channelId)
+      const endResult = await GameEngine.endGame(channelId)
       content += `😢 **游戏结束！** 正确答案是：**${endResult?.answer}**`
     } else {
       content += `⏳ 剩余猜测次数：${result.triesLeft}`

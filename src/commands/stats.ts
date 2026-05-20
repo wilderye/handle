@@ -13,7 +13,7 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const targetUser = interaction.options.getUser('user') || interaction.user
-  const stats = GameEngine.getPlayerStats(targetUser.id)
+  const stats = await GameEngine.getPlayerStats(targetUser.id)
 
   await interaction.reply({
     content: `📊 **玩家统计** - ${targetUser.username}\n\n` +

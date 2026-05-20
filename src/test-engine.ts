@@ -30,13 +30,13 @@ console.log(`   是否猜中: ${guessResult.isWin}`)
 console.log(`   剩余次数: ${guessResult.triesLeft}\n`)
 
 // 测试5：结束游戏
-const endResult = GameEngine.endGame(channelId, guessResult.isWin ? userId : undefined)
+const endResult = await GameEngine.endGame(channelId, guessResult.isWin ? userId : undefined)
 console.log(`✅ 结束游戏:`)
 console.log(`   答案: ${endResult?.answer}`)
 console.log(`   参与者: ${endResult?.participants.join(', ')}\n`)
 
 // 测试6：获取玩家统计
-const stats = GameEngine.getPlayerStats(userId)
+const stats = await GameEngine.getPlayerStats(userId)
 console.log(`✅ 玩家统计:`)
 console.log(`   参与局数: ${stats.oddsPlayedGames}`)
 console.log(`   猜中局数: ${stats.wonGames}`)
