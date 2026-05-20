@@ -4,6 +4,7 @@ import { getSoupDB } from './soup-db.js';
 export const CORE_EMOJIS: Record<string, 'yes' | 'no' | 'yes_and_no' | 'irrelevant'> = {
   '✅': 'yes',
   '❌': 'no',
+  '❎': 'no',
   '⭕': 'yes_and_no',
   '🚫': 'irrelevant',
 };

@@ -192,7 +192,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     await submitted.editReply({
       components: [box([
-        text(`## 🍲 海龟汤开局\n\n${riddle}\n\n汤主：<@${submitted.user.id}>\n表情判定：✅是  ❌不是  ⭕是也不是  🚫无关  ‼️重要  📌标注${roleMsg}`),
+        text(`## 🍲 海龟汤开局\n\n${riddle}\n\n汤主：<@${submitted.user.id}>\n表情判定：✅是  ❌/❎不是  ⭕是也不是  🚫无关  ‼️重要  📌标注${roleMsg}`),
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
@@ -331,7 +331,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         sep(),
         text(`### 指令\n\`/海龟汤 开始 [汤面]\` 开局\n\`/海龟汤 查看汤面\` 看汤面\n\`/海龟汤 查看猜测历史\` 看判定记录\n\`/海龟汤 开汤通知\` 通知喝汤人\n\`/海龟汤 结束 [汤底]\` 结局\n\`/海龟汤 帮助\` 本说明`),
         sep(),
-        text(`### 表情判定\n汤主在玩家提问消息下贴表情即可：\n✅ 是　❌ 不是　⭕ 是也不是　🚫 无关　‼️ 重要　📌 标注消息`),
+        text(`### 表情判定\n汤主在玩家提问消息下贴表情即可：\n✅ 是　❌/❎ 不是　⭕ 是也不是　🚫 无关　‼️ 重要　📌 标注消息`),
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
