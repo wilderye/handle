@@ -145,8 +145,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// 监听消息事件 (调试用)
+client.on(Events.MessageCreate, async (msg) => {
+  if (msg.author.bot) return;
+  console.log(`[MessageCreate] 收到消息: ${msg.content}, channel=${msg.channelId}`);
+});
+
 // 监听海龟汤 Reaction 事件
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  console.log(`[DEBUG-REACTION] RAW REACTION EVENT: emoji=${reaction.emoji?.name}, user=${user.id}`);
   try {
     await handleReactionAdd(reaction, user);
   } catch (error) {

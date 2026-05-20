@@ -56,16 +56,9 @@ export async function handleReactionAdd(
   const message = reaction.message;
   const messageId = message.id;
 
-  // Enforce that player asked this (host cannot archive their own question/statements)
-  const authorId = message.author?.id;
-  if (!authorId) { console.log('[Soup-Reaction] 退出: 消息没有 author'); return; }
-  if (authorId === game.hostId) { console.log('[Soup-Reaction] 退出: 汤主不能对自己的消息判定'); return; }
-  if (message.author?.bot) { console.log('[Soup-Reaction] 退出: 消息作者是 bot'); return; }
-
   const content = message.content || '';
-  console.log(`[Soup-Reaction] 通过所有检查! emoji=${emojiName}, content="${content}", author=${authorId}`);
 
-  // Case 1: 📌 → pin 消息
+  // Case 1: 📌 → pin 消息 (允许汤主 pin 自己的消息，比如汤面)
   if (emojiName === PIN_EMOJI) {
     try {
       await message.pin();
@@ -75,6 +68,14 @@ export async function handleReactionAdd(
     }
     return;
   }
+
+  // Enforce that player asked this (host cannot archive their own question/statements for core emojis)
+  const authorId = message.author?.id;
+  if (!authorId) { console.log('[Soup-Reaction] 退出: 消息没有 author'); return; }
+  if (authorId === game.hostId) { console.log('[Soup-Reaction] 退出: 汤主不能对自己的消息判定'); return; }
+  if (message.author?.bot) { console.log('[Soup-Reaction] 退出: 消息作者是 bot'); return; }
+
+  console.log(`[Soup-Reaction] 通过所有检查! emoji=${emojiName}, content="${content}", author=${authorId}`);
 
   // Case 2: Core emoji added → 归档判定
   if (emojiName in CORE_EMOJIS) {

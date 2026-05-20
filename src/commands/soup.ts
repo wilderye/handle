@@ -4,6 +4,10 @@ import {
   SlashCommandBuilder,
   PermissionsBitField,
   MessageFlags,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder,
 } from 'discord.js';
 import { getSoupDB } from '../game/soup-db.js';
 
@@ -12,31 +16,29 @@ export const data = new SlashCommandBuilder()
   .setDescription('海龟汤情境推理游戏')
   .addSubcommand(sub => sub
     .setName('开始')
-    .setDescription('开一局新的海龟汤')
-    .addStringOption(opt => opt.setName('汤面').setDescription('谜面内容').setRequired(true))
+    .setDescription('开一局新的海龟汤 (将会弹出输入框填写汤面)')
   )
   .addSubcommand(sub => sub.setName('查看汤面').setDescription('查看当前汤面'))
   .addSubcommand(sub => sub.setName('查看猜测历史').setDescription('查看判定记录'))
   .addSubcommand(sub => sub.setName('开汤通知').setDescription('通知喝汤人开汤了'))
   .addSubcommand(sub => sub
     .setName('结束')
-    .setDescription('结束当前海龟汤')
-    .addStringOption(opt => opt.setName('汤底').setDescription('谜底内容（可选）').setRequired(false))
+    .setDescription('结束当前海龟汤 (将会弹出输入框填写汤底)')
   )
   .addSubcommand(sub => sub.setName('帮助').setDescription('查看玩法与指令说明'));
 
 // ── 常量 ──
 const ANSWER_TYPES: Record<string, { label: string; emoji: string }> = {
-  yes:         { label: '是',     emoji: '✅' },
-  no:          { label: '不是',   emoji: '❌' },
-  yes_and_no:  { label: '是也不是', emoji: '⭕' },
-  irrelevant:  { label: '无关',   emoji: '🚫' },
+  yes: { label: '是', emoji: '✅' },
+  no: { label: '不是', emoji: '❌' },
+  yes_and_no: { label: '是也不是', emoji: '⭕' },
+  irrelevant: { label: '无关', emoji: '🚫' },
 };
 const PER_PAGE = 8;
 
 // ── V2 组件工厂 ──
 const text = (content: string) => ({ type: 10, content });
-const sep  = ()                => ({ type: 14, divider: true, spacing: 1 });
+const sep = () => ({ type: 14, divider: true, spacing: 1 });
 const box = (children: any[]) => ({
   type: 17, components: children,
 });
@@ -79,10 +81,10 @@ async function buildHistoryPage(interaction: any, questions: any[], page: number
   let lines = '';
   for (let i = 0; i < slice.length; i++) {
     const q = slice[i];
-    const t = ANSWER_TYPES[q.answerType] ?? { label: '?', emoji: '❓' };
+    const t = ANSWER_TYPES[q.answerType] ?? { emoji: '❓' };
     const name = await resolveDisplayName(interaction, q.userId);
-    const important = q.isImportant ? ' 🔥' : '';
-    lines += `${start + i + 1}. **${name}**：${q.content} → ${t.emoji} ${t.label}${important}\n`;
+    const important = q.isImportant ? ' ‼️' : '';
+    lines += `${start + i + 1}. **${name}**：${q.content} ${t.emoji}${important}\n`;
   }
   return box([
     text(`### 📋 判定记录 (${page}/${total})\n${lines}`),
@@ -103,22 +105,48 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       return;
     }
 
-    const riddle = interaction.options.getString('汤面', true);
-    await db.createGame(ch, interaction.user.id, riddle);
+    const modal = new ModalBuilder()
+      .setCustomId('soup_start_modal')
+      .setTitle('海龟汤开局');
+
+    const riddleInput = new TextInputBuilder()
+      .setCustomId('riddle_input')
+      .setLabel('请输入汤面 (支持换行)')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    const actionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(riddleInput);
+    modal.addComponents(actionRow);
+
+    await interaction.showModal(modal);
+
+    let submitted;
+    try {
+      submitted = await interaction.awaitModalSubmit({
+        time: 300_000,
+        filter: i => i.user.id === interaction.user.id && i.customId === 'soup_start_modal',
+      });
+    } catch (e) {
+      return; // 超时或取消
+    }
+
+    await submitted.deferReply();
+    const riddle = submitted.fields.getTextInputValue('riddle_input');
+    await db.createGame(ch, submitted.user.id, riddle);
 
     // 赋予身份组
     let roleMsg = '';
-    const guild = interaction.guild;
+    const guild = submitted.guild;
     if (guild) {
-      console.log(`[Soup] 开始身份组流程. guild=${guild.id}, user=${interaction.user.id}`);
-      
+      console.log(`[Soup] 开始身份组流程. guild=${guild.id}, user=${submitted.user.id}`);
+
       // 先刷新角色缓存
       const allRoles = await guild.roles.fetch();
       console.log(`[Soup] 已获取 ${allRoles.size} 个身份组: ${allRoles.map(r => `${r.name}(${r.id})`).join(', ')}`);
-      
+
       let role = allRoles.find(r => r.name === '海龟汤主持人') ?? null;
       console.log(`[Soup] 查找"海龟汤主持人": ${role ? `找到 id=${role.id} pos=${role.position}` : '未找到'}`);
-      
+
       if (!role) {
         const hasManageRoles = guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles);
         console.log(`[Soup] Bot 有 ManageRoles 权限: ${hasManageRoles}`);
@@ -132,7 +160,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
           }
         }
       }
-      
+
       if (role) {
         const botMember = guild.members.me;
         console.log(`[Soup] Bot highest role: ${botMember?.roles.highest.name}(pos=${botMember?.roles.highest.position}), target role pos=${role.position}`);
@@ -140,13 +168,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
           roleMsg = '\n⚠️ Bot 的角色层级低于「海龟汤主持人」，请在服务器设置中将 Bot 角色拖到该身份组上方。';
         } else {
           try {
-            const member = await guild.members.fetch(interaction.user.id);
+            const member = await guild.members.fetch(submitted.user.id);
             console.log(`[Soup] 准备给 ${member.user.tag} 添加身份组 ${role.id}`);
             console.log(`[Soup] 赋予前角色列表: ${member.roles.cache.map(r => r.name).join(', ')}`);
             // 直接用 role ID 字符串而非 role 对象
             await member.roles.add(role.id, '海龟汤开局');
             // 验证是否真的成功
-            const verified = await guild.members.fetch({ user: interaction.user.id, force: true });
+            const verified = await guild.members.fetch({ user: submitted.user.id, force: true });
             const hasRole = verified.roles.cache.has(role.id);
             console.log(`[Soup] 赋予后验证: hasRole=${hasRole}, 角色列表: ${verified.roles.cache.map(r => r.name).join(', ')}`);
             if (!hasRole) {
@@ -162,9 +190,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       }
     }
 
-    await interaction.reply({
+    await submitted.editReply({
       components: [box([
-        text(`## 🍲 海龟汤开局\n\n> ${riddle.replace(/\n/g, '\n> ')}\n\n汤主：<@${interaction.user.id}>\n表情判定：✅是 ❌不是 ⭕是也不是 🚫无关 📌标注${roleMsg}`),
+        text(`## 🍲 海龟汤开局\n\n${riddle}\n\n汤主：<@${submitted.user.id}>\n表情判定：✅是  ❌不是  ⭕是也不是  🚫无关  ‼️重要  📌标注${roleMsg}`),
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
@@ -178,7 +206,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     await interaction.reply({
       components: [box([
-        text(`## 🍲 汤面\n\n> ${game.riddle.replace(/\n/g, '\n> ')}`),
+        text(`## 🍲 汤面\n\n${game.riddle}`),
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
@@ -227,7 +255,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       await interaction.reply({ content: '⚠️ 未找到「喝汤人」身份组，请先在服务器设置中创建。', ephemeral: true });
       return;
     }
-    await interaction.reply({ content: `📢 <@&${role.id}> 海龟汤开局了，快来提问！` });
+    await interaction.reply({
+      content: `📢 <@&${role.id}> 海龟汤开局了，快来提问！`,
+      allowedMentions: { parse: ['roles'] }
+    });
     return;
   }
 
@@ -243,22 +274,49 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       return;
     }
 
+    const modal = new ModalBuilder()
+      .setCustomId('soup_end_modal')
+      .setTitle('海龟汤结局');
+
+    const answerInput = new TextInputBuilder()
+      .setCustomId('answer_input')
+      .setLabel('请输入汤底 (支持换行，不填则不显示)')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false);
+
+    const actionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(answerInput);
+    modal.addComponents(actionRow);
+
+    await interaction.showModal(modal);
+
+    let submitted;
+    try {
+      submitted = await interaction.awaitModalSubmit({
+        time: 300_000,
+        filter: i => i.user.id === interaction.user.id && i.customId === 'soup_end_modal',
+      });
+    } catch (e) {
+      return; // 超时或取消
+    }
+
+    await submitted.deferReply();
     await db.deleteGame(ch);
 
     // 移除身份组
-    if (interaction.guild) {
-      const role = await findRoleByName(interaction.guild, '海龟汤主持人');
+    if (submitted.guild) {
+      const role = await findRoleByName(submitted.guild, '海龟汤主持人');
       if (role) {
-        const host = await interaction.guild.members.fetch(game.hostId).catch(() => null);
-        if (host) await host.roles.remove(role).catch(() => {});
+        const host = await submitted.guild.members.fetch(game.hostId).catch(() => null);
+        if (host) await host.roles.remove(role).catch(() => { });
       }
     }
 
-    const answer = interaction.options.getString('汤底') || '（未公布）';
+    const answerText = submitted.fields.getTextInputValue('answer_input');
+    const answerSection = answerText ? `\n\n**汤底：**\n${answerText}` : '';
 
-    await interaction.reply({
+    await submitted.editReply({
       components: [box([
-        text(`## 🏁 海龟汤结束\n\n**汤面：**\n> ${game.riddle.replace(/\n/g, '\n> ')}\n\n**汤底：**\n> ${answer.replace(/\n/g, '\n> ')}\n\n感谢各位参与！`),
+        text(`## 🏁 海龟汤结束\n\n**汤面：**\n${game.riddle}${answerSection}\n\n感谢各位参与！`),
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
@@ -273,7 +331,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         sep(),
         text(`### 指令\n\`/海龟汤 开始 [汤面]\` 开局\n\`/海龟汤 查看汤面\` 看汤面\n\`/海龟汤 查看猜测历史\` 看判定记录\n\`/海龟汤 开汤通知\` 通知喝汤人\n\`/海龟汤 结束 [汤底]\` 结局\n\`/海龟汤 帮助\` 本说明`),
         sep(),
-        text(`### 表情判定\n汤主在玩家提问消息下贴表情即可：\n✅ 是　❌ 不是　⭕ 是也不是　🚫 无关　📌 标注消息\n附加 ❗ 或 ‼️ → 标记为**重要**`),
+        text(`### 表情判定\n汤主在玩家提问消息下贴表情即可：\n✅ 是　❌ 不是　⭕ 是也不是　🚫 无关　‼️ 重要　📌 标注消息`),
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
