@@ -50,14 +50,21 @@ const pageButtons = (page: number, total: number, uid: string) => ({
   ],
 });
 
-// ── 名字解析（截断 6 字） ──
+// ── 名字缓存（避免重复 REST 调用经 WARP 代理） ──
+const nameCache = new Map<string, { name: string; ts: number }>();
+const NAME_CACHE_TTL = 10 * 60 * 1000; // 10 分钟
+
 async function resolveDisplayName(interaction: any, userId: string): Promise<string> {
+  const cached = nameCache.get(userId);
+  if (cached && Date.now() - cached.ts < NAME_CACHE_TTL) return cached.name;
   try {
     const member = await interaction.guild?.members.fetch(userId).catch(() => null);
-    const name = member?.displayName
+    const raw = member?.displayName
       ?? (await interaction.client.users.fetch(userId).catch(() => null))?.displayName
       ?? '未知';
-    return name.length > 6 ? name.slice(0, 6) + '...' : name;
+    const name = raw.length > 6 ? raw.slice(0, 6) + '...' : raw;
+    nameCache.set(userId, { name, ts: Date.now() });
+    return name;
   } catch { return '未知'; }
 }
 
@@ -78,13 +85,14 @@ async function buildHistoryPage(interaction: any, questions: any[], page: number
   }
   const start = (page - 1) * PER_PAGE;
   const slice = questions.slice(start, start + PER_PAGE);
+  // 并行解析所有用户名（经 WARP 的 REST 调用）
+  const names = await Promise.all(slice.map(q => resolveDisplayName(interaction, q.userId)));
   let lines = '';
   for (let i = 0; i < slice.length; i++) {
     const q = slice[i];
     const t = ANSWER_TYPES[q.answerType] ?? { emoji: '❓' };
-    const name = await resolveDisplayName(interaction, q.userId);
     const important = q.isImportant ? ' ‼️' : '';
-    lines += `${start + i + 1}. **${name}**：${q.content} ${t.emoji}${important}\n`;
+    lines += `${start + i + 1}. **${names[i]}**：${q.content} ${t.emoji}${important}\n`;
   }
   return box([
     text(`### 📋 判定记录 (${page}/${total})\n${lines}`),
@@ -168,16 +176,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         } else {
           try {
             const member = await guild.members.fetch(submitted.user.id);
-
-            // 直接用 role ID 字符串而非 role 对象
             await member.roles.add(role.id, '海龟汤开局');
-            // 验证是否真的成功
-            const verified = await guild.members.fetch({ user: submitted.user.id, force: true });
-            const hasRole = verified.roles.cache.has(role.id);
-
-            if (!hasRole) {
-              roleMsg = '\n⚠️ 身份组赋予API无报错但未生效，请检查 Bot 的「管理身份组」权限。';
-            }
           } catch (e: any) {
             console.error(`[Soup] 身份组赋予失败:`, e);
             roleMsg = `\n⚠️ 无法赋予身份组：${e.message}`;
@@ -216,7 +215,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const game = await db.getGame(ch);
     if (!game) { await interaction.reply({ content: '❌ 当前没有进行中的海龟汤。', ephemeral: true }); return; }
 
-    // 直接构建并回复，不 defer（避免 REST defer 导致的"正在响应"死锁）
+    await interaction.deferReply();
     const questions = await db.getQuestionsForGame(ch);
     const totalPages = Math.max(1, Math.ceil(questions.length / PER_PAGE));
     const uid = interaction.user.id;
@@ -224,7 +223,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const components: any[] = [histContainer];
     if (totalPages > 1) components.push(pageButtons(1, totalPages, uid));
 
-    await interaction.reply({
+    await interaction.editReply({
       components,
       flags: MessageFlags.IsComponentsV2,
     });
@@ -300,15 +299,6 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await submitted.deferReply();
     await db.deleteGame(ch);
 
-    // 移除身份组
-    if (submitted.guild) {
-      const role = await findRoleByName(submitted.guild, '海龟汤主持人');
-      if (role) {
-        const host = await submitted.guild.members.fetch(game.hostId).catch(() => null);
-        if (host) await host.roles.remove(role).catch(() => { });
-      }
-    }
-
     const answerText = submitted.fields.getTextInputValue('answer_input');
     const answerSection = answerText ? `\n\n**汤底：**\n${answerText}` : '';
 
@@ -318,6 +308,16 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
+
+    // 异步移除身份组（不阻塞用户响应）
+    if (submitted.guild) {
+      const guildRef = submitted.guild;
+      findRoleByName(guildRef, '海龟汤主持人').then(async (role) => {
+        if (!role) return;
+        const host = await guildRef.members.fetch(game.hostId).catch(() => null);
+        if (host) await host.roles.remove(role).catch(() => { });
+      }).catch(() => { });
+    }
     return;
   }
 
