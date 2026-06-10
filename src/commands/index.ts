@@ -5,6 +5,7 @@ import * as help from "./help.js";
 import * as sheet from "./sheet.js";
 import * as stats from "./stats.js";
 import * as soup from "./soup.js";
+import * as undercover from "./undercover.js";
 
 export const commands = [
   handle,
@@ -15,4 +16,5 @@ export const commands = [
   stats,
   help,
   soup,
+  undercover,
 ];

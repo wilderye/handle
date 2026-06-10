@@ -12,6 +12,7 @@ import { commands } from "./commands/index.js";
 import { initSoupDB } from "./game/soup-db.js";
 import { handleReactionAdd, handleReactionRemove } from "./game/soup-reactions.js";
 import { handleSoupButton } from "./commands/soup.js";
+import { handleUndercoverReactionAdd, handleUndercoverReactionRemove } from "./game/undercover-reactions.js";
 
 // 加载环境变量
 config();
@@ -151,6 +152,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   try {
     await handleReactionAdd(reaction, user);
+    await handleUndercoverReactionAdd(reaction, user);
   } catch (error) {
     console.error("Error handling MessageReactionAdd:", error);
   }
@@ -159,6 +161,7 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
   try {
     await handleReactionRemove(reaction, user);
+    await handleUndercoverReactionRemove(reaction, user);
   } catch (error) {
     console.error("Error handling MessageReactionRemove:", error);
   }
