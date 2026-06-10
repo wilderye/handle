@@ -19,7 +19,7 @@ export const data = new SlashCommandBuilder()
     .setDescription('开一局新的海龟汤 (将会弹出输入框填写汤面)')
   )
   .addSubcommand(sub => sub.setName('查看汤面').setDescription('查看当前汤面'))
-  .addSubcommand(sub => sub.setName('查看猜测历史').setDescription('查看判定记录'))
+  // .addSubcommand(sub => sub.setName('查看猜测历史').setDescription('查看判定记录'))
   .addSubcommand(sub => sub.setName('开汤通知').setDescription('通知喝汤人开汤了'))
   .addSubcommand(sub => sub
     .setName('结束')
@@ -210,7 +210,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  // ── 查看猜测历史 ──
+  /*
+  // ── 查看猜测历史（已隐藏） ──
   if (sub === '查看猜测历史') {
     const game = await db.getGame(ch);
     if (!game) { await interaction.reply({ content: '❌ 当前没有进行中的海龟汤。', ephemeral: true }); return; }
@@ -229,6 +230,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     });
     return;
   }
+  */
 
   // ── 开汤通知（仅持有「海龟汤主持人」身份组可用） ──
   if (sub === '开汤通知') {
@@ -327,7 +329,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       components: [box([
         text(`## 🐢 海龟汤玩法\n\n汤主出谜面，喝汤人提问，汤主用表情判定。`),
         sep(),
-        text(`### 指令\n\`/海龟汤 开始 [汤面]\` 开局\n\`/海龟汤 查看汤面\` 看汤面\n\`/海龟汤 查看猜测历史\` 看判定记录\n\`/海龟汤 开汤通知\` 通知喝汤人\n\`/海龟汤 结束 [汤底]\` 结局\n\`/海龟汤 帮助\` 本说明`),
+        // 已隐藏：`/海龟汤 查看猜测历史` 看判定记录
+        text(`### 指令\n\`/海龟汤 开始 [汤面]\` 开局\n\`/海龟汤 查看汤面\` 看汤面\n\`/海龟汤 开汤通知\` 通知喝汤人\n\`/海龟汤 结束 [汤底]\` 结局\n\`/海龟汤 帮助\` 本说明`),
         sep(),
         text(`### 表情判定\n汤主在玩家提问消息下贴表情即可：\n✅ 是　❌/❎ 不是　⭕ 是也不是　🚫 无关　‼️ 重要　📌 标注消息`),
       ])],
