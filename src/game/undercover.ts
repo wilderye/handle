@@ -13,6 +13,8 @@ export interface UndercoverWordPair {
   undercover: string
 }
 
+export type UndercoverWordSource = 'custom' | 'random'
+
 export interface UndercoverPlayer {
   userId: string
   joinedAt: number
@@ -22,6 +24,10 @@ export interface UndercoverGame {
   channelId: string
   hostId: string
   joinMessageId?: string
+  wordSource: UndercoverWordSource
+  civilianWord: string
+  undercoverWord: string
+  allowLying: boolean
   players: UndercoverPlayer[]
   dealtAt?: number
   deal?: UndercoverDealResult
@@ -81,16 +87,26 @@ export function formatSpeechOrder(players: DisplayPlayer[]): string {
   return `**建议发言顺序：**\n${lines.join('\n')}`
 }
 
+export function formatBooleanRule(value: boolean): string {
+  return value ? '是' : '否'
+}
+
+export function formatWordSource(source: UndercoverWordSource): string {
+  return source === 'random' ? '随机发词' : '自定义发词'
+}
+
 export function formatHostSecret(input: {
   civilianWord: string
   undercoverWord: string
   undercoverName: string
+  allowLying: boolean
   failedDmNames?: string[]
 }): string {
   let content =
     `## 本局词语\n\n` +
     `**平民词：**${input.civilianWord}\n` +
-    `**卧底词：**${input.undercoverWord}\n\n` +
+    `**卧底词：**${input.undercoverWord}\n` +
+    `**可否撒谎：**${formatBooleanRule(input.allowLying)}\n\n` +
     `**卧底：**${sanitizeDisplayName(input.undercoverName)}`
 
   if (input.failedDmNames && input.failedDmNames.length > 0) {
@@ -100,12 +116,43 @@ export function formatHostSecret(input: {
   return content
 }
 
-export function formatLobbyMessage(hostName: string): string {
+export function formatEndReveal(input: {
+  civilianWord: string
+  undercoverWord: string
+  undercoverName: string
+}): string {
+  return (
+    `## 🏁 谁是卧底结束\n\n` +
+    `**平民词：**${input.civilianWord}\n` +
+    `**卧底词：**${input.undercoverWord}\n\n` +
+    `**卧底：**${sanitizeDisplayName(input.undercoverName)}`
+  )
+}
+
+export function formatPreparedEnd(input: {
+  civilianWord: string
+  undercoverWord: string
+}): string {
+  return (
+    `## 🏁 谁是卧底结束\n\n` +
+    `本局尚未正式开始，卧底尚未分配。\n\n` +
+    `**平民词：**${input.civilianWord}\n` +
+    `**卧底词：**${input.undercoverWord}`
+  )
+}
+
+export function formatLobbyMessage(input: {
+  hostName: string
+  wordSource: UndercoverWordSource
+  allowLying: boolean
+}): string {
   return (
     `## 🎭 谁是卧底报名开始\n\n` +
-    `**主持人：**${sanitizeDisplayName(hostName)}\n` +
+    `**主持人：**${sanitizeDisplayName(input.hostName)}\n` +
+    `**词汇来源：**${formatWordSource(input.wordSource)}\n` +
+    `**可否撒谎：**${formatBooleanRule(input.allowLying)}\n` +
     `请点击 ${UNDERCOVER_JOIN_EMOJI} 报名。\n` +
-    `主持人使用 \`/卧底 自定义发词\` 或 \`/卧底 随机发词\` 开始发词并停止报名。`
+    `主持人使用 \`/卧底 正式开始\` 停止报名并发词。`
   )
 }
 
@@ -115,7 +162,16 @@ function sanitizeDisplayName(name: string): string {
 }
 
 export class UndercoverEngine {
-  static startGame(channelId: string, hostId: string): {
+  static startGame(
+    channelId: string,
+    hostId: string,
+    input: {
+      wordSource: UndercoverWordSource
+      civilianWord: string
+      undercoverWord: string
+      allowLying: boolean
+    },
+  ): {
     ok: boolean
     game?: UndercoverGame
     error?: string
@@ -123,10 +179,20 @@ export class UndercoverEngine {
     if (games.has(channelId)) {
       return { ok: false, error: '当前频道已有进行中的谁是卧底。' }
     }
+    if (!input.civilianWord.trim() || !input.undercoverWord.trim()) {
+      return { ok: false, error: '平民词和卧底词都不能为空。' }
+    }
+    if (input.civilianWord.trim() === input.undercoverWord.trim()) {
+      return { ok: false, error: '平民词和卧底词不能相同。' }
+    }
 
     const game: UndercoverGame = {
       channelId,
       hostId,
+      wordSource: input.wordSource,
+      civilianWord: input.civilianWord.trim(),
+      undercoverWord: input.undercoverWord.trim(),
+      allowLying: input.allowLying,
       players: [],
       createdAt: Date.now(),
     }
@@ -188,23 +254,13 @@ export class UndercoverEngine {
     }
   }
 
-  static dealWords(
-    channelId: string,
-    pair: UndercoverWordPair,
-    rng: () => number = Math.random,
-  ): UndercoverDealResult {
+  static dealWords(channelId: string, rng: () => number = Math.random): UndercoverDealResult {
     const game = this.requireGame(channelId)
     if (game.dealtAt) {
       throw new Error('本局已经发过词了。')
     }
     if (game.players.length < UNDERCOVER_MIN_PLAYERS) {
       throw new Error(`至少需要 ${UNDERCOVER_MIN_PLAYERS} 名玩家才能发词。`)
-    }
-    if (!pair.civilian.trim() || !pair.undercover.trim()) {
-      throw new Error('平民词和卧底词都不能为空。')
-    }
-    if (pair.civilian.trim() === pair.undercover.trim()) {
-      throw new Error('平民词和卧底词不能相同。')
     }
 
     const undercoverIndex = Math.min(
@@ -214,15 +270,15 @@ export class UndercoverEngine {
     const undercoverUserId = game.players[undercoverIndex].userId
 
     const result: UndercoverDealResult = {
-      civilianWord: pair.civilian.trim(),
-      undercoverWord: pair.undercover.trim(),
+      civilianWord: game.civilianWord,
+      undercoverWord: game.undercoverWord,
       undercoverUserId,
       assignments: game.players.map(player => {
         const isUndercover = player.userId === undercoverUserId
         return {
           userId: player.userId,
           role: isUndercover ? 'undercover' : 'civilian',
-          word: isUndercover ? pair.undercover.trim() : pair.civilian.trim(),
+          word: isUndercover ? game.undercoverWord : game.civilianWord,
         }
       }),
     }

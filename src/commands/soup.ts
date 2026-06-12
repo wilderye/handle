@@ -10,10 +10,28 @@ import {
   ActionRowBuilder,
 } from 'discord.js';
 import { getSoupDB } from '../game/soup-db.js';
+import {
+  addHostRoleToMember,
+  memberHasHostRole,
+  removeHostRoleFromMember,
+} from '../game/discord-roles.js';
+import {
+  consumeSoupRegistration,
+  createSoupRegistration,
+  formatSoupRegistrationDm,
+  formatSoupRegistrationFailureNotice,
+  formatSoupRegistrationMessage,
+  hasSoupRegistration,
+  SOUP_REGISTRATION_EMOJI,
+} from '../game/soup-registration.js';
 
 export const data = new SlashCommandBuilder()
   .setName('海龟汤')
   .setDescription('海龟汤情境推理游戏')
+  .addSubcommand(sub => sub
+    .setName('报名阶段')
+    .setDescription('进入报名阶段，并在游戏开始后私信通知报名者。')
+  )
   .addSubcommand(sub => sub
     .setName('开始')
     .setDescription('开一局新的海龟汤 (将会弹出输入框填写汤面)')
@@ -105,6 +123,43 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const ch = interaction.channelId;
   const db = getSoupDB();
 
+  // ── 报名阶段 ──
+  if (sub === '报名阶段') {
+    const existing = await db.getGame(ch);
+    if (existing) {
+      await interaction.reply({ content: '❌ 本频道已有进行中的海龟汤，不能开启新的报名阶段。', ephemeral: true });
+      return;
+    }
+
+    if (hasSoupRegistration(ch)) {
+      await interaction.reply({ content: '❌ 本频道已有海龟汤报名阶段。', ephemeral: true });
+      return;
+    }
+
+    await interaction.reply({
+      components: [box([text(formatSoupRegistrationMessage())])],
+      flags: MessageFlags.IsComponentsV2,
+    });
+
+    const message = await interaction.fetchReply();
+    const result = createSoupRegistration(ch, message.id);
+    if (!result.ok) {
+      await interaction.followUp({ content: '❌ 本频道已有海龟汤报名阶段。', ephemeral: true });
+      return;
+    }
+
+    try {
+      await message.react(SOUP_REGISTRATION_EMOJI);
+    } catch (error) {
+      console.error('[Soup] 添加报名反应失败:', error);
+      await interaction.followUp({
+        content: `⚠️ 无法添加 ${SOUP_REGISTRATION_EMOJI} 反应，请检查 Bot 的消息反应权限。`,
+        ephemeral: true,
+      });
+    }
+    return;
+  }
+
   // ── 开始 ──
   if (sub === '开始') {
     const existing = await db.getGame(ch);
@@ -142,50 +197,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const riddle = submitted.fields.getTextInputValue('riddle_input');
     await db.createGame(ch, submitted.user.id, riddle);
 
-    // 赋予身份组
-    let roleMsg = '';
-    const guild = submitted.guild;
-    if (guild) {
-
-
-      // 先刷新角色缓存
-      const allRoles = await guild.roles.fetch();
-
-      let role = allRoles.find(r => r.name === '海龟汤主持人') ?? null;
-
-
-      if (!role) {
-        const hasManageRoles = guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles);
-
-        if (hasManageRoles) {
-          try {
-            role = await guild.roles.create({ name: '海龟汤主持人', color: 0xf1c40f, reason: '海龟汤游戏' });
-
-          } catch (e: any) {
-            console.error(`[Soup] 创建身份组失败:`, e);
-            roleMsg = `\n⚠️ 无法创建身份组：${e.message}`;
-          }
-        }
-      }
-
-      if (role) {
-        const botMember = guild.members.me;
-
-        if (botMember && botMember.roles.highest.position <= role.position) {
-          roleMsg = '\n⚠️ Bot 的角色层级低于「海龟汤主持人」，请在服务器设置中将 Bot 角色拖到该身份组上方。';
-        } else {
-          try {
-            const member = await guild.members.fetch(submitted.user.id);
-            await member.roles.add(role.id, '海龟汤开局');
-          } catch (e: any) {
-            console.error(`[Soup] 身份组赋予失败:`, e);
-            roleMsg = `\n⚠️ 无法赋予身份组：${e.message}`;
-          }
-        }
-      } else if (!roleMsg) {
-        roleMsg = '\n⚠️ 未找到「海龟汤主持人」身份组，且 Bot 无权创建。请手动创建或给予 Bot「管理角色」权限。';
-      }
-    }
+    const roleMsg = submitted.guild
+      ? await addHostRoleToMember(submitted.guild, submitted.user.id, '海龟汤开局')
+      : '';
 
     await submitted.editReply({
       components: [box([
@@ -193,6 +207,14 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       ])],
       flags: MessageFlags.IsComponentsV2,
     });
+
+    const failedDmNames = await notifySoupRegistrants(submitted, ch);
+    if (failedDmNames.length > 0) {
+      await submitted.followUp({
+        content: formatSoupRegistrationFailureNotice(failedDmNames),
+        ephemeral: true,
+      });
+    }
     return;
   }
 
@@ -238,10 +260,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     if (!game) { await interaction.reply({ content: '❌ 当前没有进行中的海龟汤。', ephemeral: true }); return; }
 
     // 检查身份组而非数据库记录
-    const member = interaction.member as any;
-    const hasHostRole = member?.roles?.cache?.some((r: any) => r.name === '海龟汤主持人');
+    const member = interaction.guild
+      ? await interaction.guild.members.fetch(interaction.user.id).catch(() => null)
+      : null;
+    const hasHostRole = member ? memberHasHostRole(member) : false;
     if (!hasHostRole) {
-      await interaction.reply({ content: '❌ 只有持有「海龟汤主持人」身份组的人可以发送开汤通知。', ephemeral: true });
+      await interaction.reply({ content: '❌ 只有持有「主持人」身份组的人可以发送开汤通知。', ephemeral: true });
       return;
     }
 
@@ -314,11 +338,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     // 异步移除身份组（不阻塞用户响应）
     if (submitted.guild) {
       const guildRef = submitted.guild;
-      findRoleByName(guildRef, '海龟汤主持人').then(async (role) => {
-        if (!role) return;
-        const host = await guildRef.members.fetch(game.hostId).catch(() => null);
-        if (host) await host.roles.remove(role).catch(() => { });
-      }).catch(() => { });
+      removeHostRoleFromMember(guildRef, game.hostId, '海龟汤结束').catch(() => { });
     }
     return;
   }
@@ -330,7 +350,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         text(`## 🐢 海龟汤玩法\n\n汤主出谜面，喝汤人提问，汤主用表情判定。`),
         sep(),
         // 已隐藏：`/海龟汤 查看猜测历史` 看判定记录
-        text(`### 指令\n\`/海龟汤 开始 [汤面]\` 开局\n\`/海龟汤 查看汤面\` 看汤面\n\`/海龟汤 开汤通知\` 通知喝汤人\n\`/海龟汤 结束 [汤底]\` 结局\n\`/海龟汤 帮助\` 本说明`),
+        text(`### 指令\n\`/海龟汤 报名阶段\` 可选流程。让想在本局开汤时收到私信提醒的人先报名；不使用报名阶段也可以直接 \`/海龟汤 开始\`。\n\`/海龟汤 开始 [汤面]\` 开局\n\`/海龟汤 查看汤面\` 看汤面\n\`/海龟汤 开汤通知\` 通知喝汤人\n\`/海龟汤 结束 [汤底]\` 结局\n\`/海龟汤 帮助\` 本说明`),
         sep(),
         text(`### 表情判定\n汤主在玩家提问消息下贴表情即可：\n✅ 是　❌/❎ 不是　⭕ 是也不是　🚫 无关　‼️ 重要　📌 标注消息`),
       ])],
@@ -338,6 +358,38 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     });
     return;
   }
+}
+
+async function notifySoupRegistrants(interaction: any, channelId: string): Promise<string[]> {
+  const registration = consumeSoupRegistration(channelId);
+  if (!registration) return [];
+
+  const channel = interaction.channel;
+  if (!channel || !('messages' in channel)) return [];
+
+  const message = await channel.messages.fetch(registration.messageId).catch(() => null);
+  if (!message) return [];
+
+  const reaction = message.reactions.cache.find((candidate: any) => candidate.emoji.name === SOUP_REGISTRATION_EMOJI);
+  if (!reaction) return [];
+
+  const users = await reaction.users.fetch().catch(() => null);
+  if (!users) return [];
+
+  const failedNames: string[] = [];
+  for (const user of users.filter((candidate: any) => !candidate.bot).values()) {
+    try {
+      await user.send({
+        components: [box([text(formatSoupRegistrationDm())])],
+        flags: MessageFlags.IsComponentsV2,
+      });
+    } catch (error) {
+      console.error(`[Soup] 私信报名者 ${user.id} 失败:`, error);
+      failedNames.push(await resolveDisplayName(interaction, user.id));
+    }
+  }
+
+  return failedNames;
 }
 
 // ── 翻页按钮处理（由 index.ts 全局调用） ──
