@@ -49,7 +49,7 @@ export const data = new SlashCommandBuilder()
   .setName('卧底')
   .setDescription('谁是卧底游戏')
   .addSubcommand(sub => sub
-    .setName('准备阶段')
+    .setName('报名阶段')
     .setDescription('用户成为主持人，决定词汇并进入报名阶段。可以选择自定义发词或随机发词，也可以设置参与者是否允许撒谎。')
     .addStringOption(option => option
       .setName(WORD_SOURCE_OPTION)
@@ -71,8 +71,8 @@ export const data = new SlashCommandBuilder()
     .setDescription('停止报名，BOT将词汇私信给参与者')
   )
   .addSubcommand(sub => sub
-    .setName('报名通知')
-    .setDescription('通知小心她人！身份组成员有游戏进入报名阶段')
+    .setName('游戏通知')
+    .setDescription('通知“小心她人！”身份组成员前来玩游戏！')
   )
   .addSubcommand(sub => sub
     .setName('结束')
@@ -91,7 +91,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   const sub = interaction.options.getSubcommand()
 
-  if (sub === '准备阶段') {
+  if (sub === '报名阶段') {
     await handlePrepare(interaction)
     return
   }
@@ -101,7 +101,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return
   }
 
-  if (sub === '报名通知') {
+  if (sub === '游戏通知') {
     await handleRegistrationNotice(interaction)
     return
   }
@@ -144,7 +144,7 @@ async function handlePrepare(interaction: ChatInputCommandInteraction) {
   const modalId = `undercover_prepare_words_${interaction.channelId}_${interaction.user.id}`
   const modal = new ModalBuilder()
     .setCustomId(modalId)
-    .setTitle('谁是卧底准备阶段')
+    .setTitle('谁是卧底报名阶段')
 
   const civilianInput = new TextInputBuilder()
     .setCustomId('civilian_word')
@@ -213,7 +213,7 @@ async function createPreparedGame(
 
   const hostName = await resolveDisplayName(interaction, interaction.user.id)
   const roleMsg = interaction.guild
-    ? await addHostRoleToMember(interaction.guild, interaction.user.id, '谁是卧底准备阶段')
+    ? await addHostRoleToMember(interaction.guild, interaction.user.id, '谁是卧底报名阶段')
     : ''
 
   await interaction.editReply(panel(formatLobbyMessage({
@@ -273,12 +273,12 @@ async function handleRegistrationNotice(interaction: ChatInputCommandInteraction
   }
 
   if (game.hostId !== interaction.user.id) {
-    await interaction.reply({ content: '❌ 只有本局主持人可以发送报名通知。', ephemeral: true })
+    await interaction.reply({ content: '❌ 只有本局主持人可以发送游戏通知。', ephemeral: true })
     return
   }
 
   if (game.dealtAt) {
-    await interaction.reply({ content: '❌ 本局已经正式开始，不能再发送报名通知。', ephemeral: true })
+    await interaction.reply({ content: '❌ 本局已经正式开始，不能再发送游戏通知。', ephemeral: true })
     return
   }
 
@@ -292,7 +292,7 @@ async function handleRegistrationNotice(interaction: ChatInputCommandInteraction
   }
 
   await interaction.reply({
-    content: `📢 <@&${UNDERCOVER_NOTIFY_ROLE_ID}> 谁是卧底报名开始，来玩！`,
+    content: `📢 <@&${UNDERCOVER_NOTIFY_ROLE_ID}> 谁是卧底开玩啦，来报名！`,
     allowedMentions: { roles: [UNDERCOVER_NOTIFY_ROLE_ID] },
   })
 }
@@ -341,26 +341,22 @@ async function handleHelp(interaction: ChatInputCommandInteraction) {
   await interaction.reply({
     components: [box([
       text(
-        `## 谁是卧底帮助\n\n` +
-        `### 基本规则\n` +
-        `主持人先进入准备阶段，决定本局词汇和是否允许撒谎。玩家点击报名消息下方的 ${UNDERCOVER_JOIN_EMOJI} 参加。\n\n` +
-        `正式开始后，Bot 会把词语私信给每位参与者。大多数玩家拿到同一个平民词，只有一名卧底拿到不同的卧底词。\n\n` +
-        `玩家按发言顺序描述自己的词，尽量证明自己是平民，同时避免直接说出词语。本局是否允许撒谎，以准备阶段的设置为准。\n\n` +
+        `## 🎭 “谁是卧底”游戏说明\n\n` +
+        `多数玩家会拿到同一个平民词，只有 1 名玩家拿到不同但相近的卧底词。\n\n` +
+        `玩家轮流描述自己的词，不能直接说出词语本身。平民要找出卧底，卧底要隐藏身份、混入平民。本局是否允许撒谎，以主持人设置为准。\n\n` +
         `讨论结束后，由大家自行投票或由主持人组织判断。游戏结束时，Bot 会公布平民词、卧底词和卧底是谁。`,
       ),
       sep(),
       text(
         `### 命令\n` +
-        `\`/卧底 准备阶段\`\n` +
-        `用户成为主持人，决定词汇并进入报名阶段。可以选择自定义发词或随机发词，也可以设置参与者是否允许撒谎。\n\n` +
+        `\`/卧底 报名阶段\`\n` +
+        `用户成为主持人，决定词汇并进入报名阶段。\n\n` +
         `\`/卧底 正式开始\`\n` +
-        `停止报名，Bot 将词汇私信给参与者，并在频道公布建议发言顺序。仅本局主持人可用。\n\n` +
-        `\`/卧底 报名通知\`\n` +
-        `通知\`小心她人！\`身份组成员有游戏进入报名阶段。仅本局主持人可用。\n\n` +
+        `停止报名，Bot 将词汇私信给参与者，并公布建议发言顺序。仅本局主持人可用。\n\n` +
+        `\`/卧底 游戏通知\`\n` +
+        `通知\`小心她人！\`身份组成员前来玩游戏！仅本局主持人可用。\n\n` +
         `\`/卧底 结束\`\n` +
-        `结束当前谁是卧底，并公布平民词、卧底词和卧底是谁。仅本局主持人可用。\n\n` +
-        `\`/卧底 帮助\`\n` +
-        `查看本说明。`,
+        `结束当前谁是卧底，并公布答案。仅本局主持人可用。`,
       ),
     ])],
     flags: componentsV2Flags,

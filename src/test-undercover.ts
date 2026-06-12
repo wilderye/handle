@@ -43,7 +43,7 @@ assert.equal(start.game?.wordSource, 'custom')
 assert.equal(start.game?.civilianWord, '苹果')
 assert.equal(start.game?.undercoverWord, '梨')
 assert.equal(start.game?.allowLying, true)
-console.log('✅ 准备阶段保存主持人、词汇来源、词语和撒谎规则')
+console.log('✅ 报名阶段保存主持人、词汇来源、词语和撒谎规则')
 
 assert.throws(
   () => UndercoverEngine.assertHost(channelId, 'not-host'),
