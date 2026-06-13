@@ -9,6 +9,7 @@ import {
 } from 'discord.js'
 import {
   formatBooleanRule,
+  formatAudiencePeek,
   formatEndReveal,
   formatHostSecret,
   formatLobbyMessage,
@@ -75,6 +76,10 @@ export const data = new SlashCommandBuilder()
     .setDescription('通知“小心她人！”身份组成员前来玩游戏！')
   )
   .addSubcommand(sub => sub
+    .setName('观众偷看')
+    .setDescription('旁观者查看本局答案，请不要泄露词汇和卧底身份')
+  )
+  .addSubcommand(sub => sub
     .setName('结束')
     .setDescription('结束当前谁是卧底')
   )
@@ -103,6 +108,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   if (sub === '游戏通知') {
     await handleRegistrationNotice(interaction)
+    return
+  }
+
+  if (sub === '观众偷看') {
+    await handleAudiencePeek(interaction)
     return
   }
 
@@ -298,6 +308,40 @@ async function handleRegistrationNotice(interaction: ChatInputCommandInteraction
   })
 }
 
+async function handleAudiencePeek(interaction: ChatInputCommandInteraction) {
+  const game = UndercoverEngine.getGame(interaction.channelId)
+  if (!game) {
+    await interaction.reply({ content: '❌ 当前频道没有进行中的谁是卧底。', ephemeral: true })
+    return
+  }
+
+  if (game.hostId === interaction.user.id) {
+    await interaction.reply({ content: '❌ 主持人已经知道答案，不能使用观众偷看。', ephemeral: true })
+    return
+  }
+
+  if (game.players.some(player => player.userId === interaction.user.id)) {
+    await interaction.reply({ content: '❌ 参与者不能使用观众偷看。', ephemeral: true })
+    return
+  }
+
+  if (!game.deal) {
+    await interaction.reply({
+      content: '❌ 本局尚未正式开始，发词后旁观者才可以偷看答案。',
+      ephemeral: true,
+    })
+    return
+  }
+
+  await interaction.deferReply({ ephemeral: true })
+  const undercoverName = await resolveDisplayName(interaction, game.deal.undercoverUserId)
+  await interaction.editReply(panel(formatAudiencePeek({
+    civilianWord: game.deal.civilianWord,
+    undercoverWord: game.deal.undercoverWord,
+    undercoverName,
+  })))
+}
+
 async function handleEnd(interaction: ChatInputCommandInteraction) {
   const game = UndercoverEngine.getGame(interaction.channelId)
   if (!game) {
@@ -325,10 +369,7 @@ async function buildEndContent(
   game: UndercoverGame,
 ): Promise<string> {
   if (!game.deal) {
-    return formatPreparedEnd({
-      civilianWord: game.civilianWord,
-      undercoverWord: game.undercoverWord,
-    })
+    return formatPreparedEnd()
   }
 
   const undercoverName = await resolveDisplayName(interaction, game.deal.undercoverUserId)
@@ -357,6 +398,8 @@ async function handleHelp(interaction: ChatInputCommandInteraction) {
         `停止报名，Bot 将词汇私信给参与者，并公布建议发言顺序。仅本局主持人可用。\n\n` +
         `\`/卧底 游戏通知\`\n` +
         `通知\`小心她人！\`身份组成员前来玩游戏！仅本局主持人可用。\n\n` +
+        `\`/卧底 观众偷看\`\n` +
+        `旁观者查看本局平民词、卧底词和卧底是谁。请不要泄露词汇和卧底身份。仅非主持人、非参与者可用。\n\n` +
         `\`/卧底 结束\`\n` +
         `结束当前谁是卧底，并公布答案。仅本局主持人可用。`,
       ),

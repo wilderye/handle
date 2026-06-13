@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { execute as executeUndercoverCommand } from './commands/undercover.js'
 import {
   UndercoverEngine,
+  formatAudiencePeek,
   formatEndReveal,
   formatHostSecret,
   formatLobbyMessage,
@@ -11,6 +12,10 @@ import {
 } from './game/undercover.js'
 
 console.log('🧪 开始谁是卧底核心逻辑测试...\n')
+
+function getPanelText(payload: any): string {
+  return payload?.components?.[0]?.components?.[0]?.content ?? ''
+}
 
 await UndercoverEngine.resetAllForTest()
 
@@ -130,6 +135,69 @@ assert.equal(
 )
 console.log('✅ 正式开始后结束公开信息包含平民词、卧底词和卧底')
 
+const audiencePeek = formatAudiencePeek({
+  civilianWord: '苹果',
+  undercoverWord: '梨',
+  undercoverName: '用户A',
+})
+
+assert.equal(
+  audiencePeek,
+  '## 👀 观众偷看\n\n**平民词：**苹果\n**卧底词：**梨\n\n**卧底：**用户A\n\n请不要泄露词汇和卧底身份。',
+)
+console.log('✅ 观众偷看信息包含平民词、卧底词、卧底和保密提醒')
+
+let hostPeekReply: any
+await executeUndercoverCommand({
+  guild: {},
+  channelId,
+  user: { id: hostId },
+  options: { getSubcommand: () => '观众偷看' },
+  reply: async (payload: any) => {
+    hostPeekReply = payload
+  },
+} as any)
+assert.equal(hostPeekReply.content, '❌ 主持人已经知道答案，不能使用观众偷看。')
+
+let playerPeekReply: any
+await executeUndercoverCommand({
+  guild: {},
+  channelId,
+  user: { id: 'u2' },
+  options: { getSubcommand: () => '观众偷看' },
+  reply: async (payload: any) => {
+    playerPeekReply = payload
+  },
+} as any)
+assert.equal(playerPeekReply.content, '❌ 参与者不能使用观众偷看。')
+
+let audiencePeekDeferred = false
+let audiencePeekEdit: any
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async () => ({ displayName: '用户A' }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async () => ({ displayName: '用户A', username: 'user-a' }),
+    },
+  },
+  channelId,
+  user: { id: 'audience-user' },
+  options: { getSubcommand: () => '观众偷看' },
+  deferReply: async (payload: any) => {
+    audiencePeekDeferred = payload?.ephemeral === true
+  },
+  editReply: async (payload: any) => {
+    audiencePeekEdit = payload
+  },
+} as any)
+assert.equal(audiencePeekDeferred, true)
+assert.equal(getPanelText(audiencePeekEdit), audiencePeek)
+console.log('✅ 观众偷看仅允许非主持人、非参与者使用，并会私密返回答案')
+
 await UndercoverEngine.endGame(channelId)
 assert.equal(UndercoverEngine.hasActiveGame(channelId), false)
 
@@ -144,16 +212,29 @@ assert.equal(prepared.ok, true)
 assert.equal(prepared.game?.wordSource, 'random')
 assert.equal(prepared.game?.allowLying, false)
 
-const preparedEnd = formatPreparedEnd({
-  civilianWord: prepared.game!.civilianWord,
-  undercoverWord: prepared.game!.undercoverWord,
-})
+const preparedEnd = formatPreparedEnd()
 
 assert.equal(
   preparedEnd,
-  '## 🏁 谁是卧底结束\n\n本局尚未正式开始，卧底尚未分配。\n\n**平民词：**猫\n**卧底词：**狗',
+  '## 🏁 谁是卧底结束\n\n本局尚未正式开始，卧底尚未分配。',
 )
-console.log('✅ 未正式开始时结束会说明卧底尚未分配，并公布已准备词语')
+assert.equal(preparedEnd.includes(prepared.game!.civilianWord), false)
+assert.equal(preparedEnd.includes(prepared.game!.undercoverWord), false)
+console.log('✅ 未正式开始时结束会说明卧底尚未分配，并且不会公布已准备词语')
+
+let preDealPeekReply: any
+await executeUndercoverCommand({
+  guild: {},
+  channelId: preparedChannelId,
+  user: { id: 'audience-before-deal' },
+  options: { getSubcommand: () => '观众偷看' },
+  reply: async (payload: any) => {
+    preDealPeekReply = payload
+  },
+} as any)
+assert.equal(preDealPeekReply.content.includes(prepared.game!.civilianWord), false)
+assert.equal(preDealPeekReply.content.includes(prepared.game!.undercoverWord), false)
+console.log('✅ 未正式开始时观众偷看不会泄露词语')
 
 const reloadChannelId = 'undercover-reload-channel'
 const reloadStart = await UndercoverEngine.startGame(reloadChannelId, hostId, {

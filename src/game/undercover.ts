@@ -391,15 +391,24 @@ export function formatEndReveal(input: {
   )
 }
 
-export function formatPreparedEnd(input: {
+export function formatAudiencePeek(input: {
   civilianWord: string
   undercoverWord: string
+  undercoverName: string
 }): string {
   return (
-    `## 🏁 谁是卧底结束\n\n` +
-    `本局尚未正式开始，卧底尚未分配。\n\n` +
+    `## 👀 观众偷看\n\n` +
     `**平民词：**${input.civilianWord}\n` +
-    `**卧底词：**${input.undercoverWord}`
+    `**卧底词：**${input.undercoverWord}\n\n` +
+    `**卧底：**${sanitizeDisplayName(input.undercoverName)}\n\n` +
+    `请不要泄露词汇和卧底身份。`
+  )
+}
+
+export function formatPreparedEnd(): string {
+  return (
+    `## 🏁 谁是卧底结束\n\n` +
+    `本局尚未正式开始，卧底尚未分配。`
   )
 }
 
