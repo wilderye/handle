@@ -10,6 +10,7 @@ import { config } from "dotenv";
 import { createServer } from "node:http";
 import { commands } from "./commands/index.js";
 import { initSoupDB } from "./game/soup-db.js";
+import { initUndercoverDB } from "./game/undercover.js";
 import { handleReactionAdd, handleReactionRemove } from "./game/soup-reactions.js";
 import { handleSoupButton } from "./commands/soup.js";
 import { handleUndercoverReactionAdd, handleUndercoverReactionRemove } from "./game/undercover-reactions.js";
@@ -19,6 +20,8 @@ config();
 
 // 初始化海龟汤数据库
 await initSoupDB();
+// 初始化谁是卧底数据库
+await initUndercoverDB();
 
 // ============ Cloudflare WARP 代理设置 ============
 // 当 wireproxy 运行时，所有出站流量走 Cloudflare WARP 的干净 IP

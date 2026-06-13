@@ -1,7 +1,9 @@
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
+import pkg from 'pg'
 import { fileURLToPath } from 'url'
 
+const { Pool } = pkg
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
@@ -52,7 +54,267 @@ export interface DisplayPlayer {
   displayName: string
 }
 
+interface UndercoverStore {
+  loadGames(): Promise<UndercoverGame[]>
+  saveGame(game: UndercoverGame): Promise<void>
+  deleteGame(channelId: string): Promise<void>
+}
+
+class MemoryUndercoverStore implements UndercoverStore {
+  private storedGames = new Map<string, UndercoverGame>()
+
+  async loadGames(): Promise<UndercoverGame[]> {
+    return Array.from(this.storedGames.values()).map(cloneGame)
+  }
+
+  async saveGame(game: UndercoverGame): Promise<void> {
+    this.storedGames.set(game.channelId, cloneGame(game))
+  }
+
+  async deleteGame(channelId: string): Promise<void> {
+    this.storedGames.delete(channelId)
+  }
+}
+
+class PGUndercoverStore implements UndercoverStore {
+  private pool: any
+
+  constructor(connectionString: string) {
+    const cleanUrl = connectionString.replace('?sslmode=require', '')
+    this.pool = new Pool({
+      connectionString: cleanUrl,
+      ssl: {
+        rejectUnauthorized: false,
+      },
+    })
+  }
+
+  async init(): Promise<void> {
+    await this.pool.query('SELECT 1')
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS undercover_games (
+        channel_id VARCHAR(50) PRIMARY KEY,
+        host_id VARCHAR(50) NOT NULL,
+        join_message_id VARCHAR(50),
+        word_source VARCHAR(20) NOT NULL,
+        civilian_word TEXT NOT NULL,
+        undercover_word TEXT NOT NULL,
+        allow_lying BOOLEAN NOT NULL DEFAULT FALSE,
+        players JSONB NOT NULL DEFAULT '[]'::jsonb,
+        dealt_at TIMESTAMP,
+        deal JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `)
+  }
+
+  async loadGames(): Promise<UndercoverGame[]> {
+    const res = await this.pool.query(`
+      SELECT
+        channel_id,
+        host_id,
+        join_message_id,
+        word_source,
+        civilian_word,
+        undercover_word,
+        allow_lying,
+        players,
+        dealt_at,
+        deal,
+        created_at
+      FROM undercover_games
+    `)
+    return res.rows.map((row: any) => ({
+      channelId: row.channel_id,
+      hostId: row.host_id,
+      joinMessageId: row.join_message_id ?? undefined,
+      wordSource: row.word_source === 'random' ? 'random' : 'custom',
+      civilianWord: row.civilian_word,
+      undercoverWord: row.undercover_word,
+      allowLying: Boolean(row.allow_lying),
+      players: parseStoredPlayers(row.players),
+      dealtAt: row.dealt_at ? new Date(row.dealt_at).getTime() : undefined,
+      deal: parseStoredDeal(row.deal),
+      createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+    }))
+  }
+
+  async saveGame(game: UndercoverGame): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO undercover_games (
+        channel_id,
+        host_id,
+        join_message_id,
+        word_source,
+        civilian_word,
+        undercover_word,
+        allow_lying,
+        players,
+        dealt_at,
+        deal,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11)
+      ON CONFLICT (channel_id) DO UPDATE SET
+        host_id = EXCLUDED.host_id,
+        join_message_id = EXCLUDED.join_message_id,
+        word_source = EXCLUDED.word_source,
+        civilian_word = EXCLUDED.civilian_word,
+        undercover_word = EXCLUDED.undercover_word,
+        allow_lying = EXCLUDED.allow_lying,
+        players = EXCLUDED.players,
+        dealt_at = EXCLUDED.dealt_at,
+        deal = EXCLUDED.deal,
+        created_at = EXCLUDED.created_at`,
+      [
+        game.channelId,
+        game.hostId,
+        game.joinMessageId ?? null,
+        game.wordSource,
+        game.civilianWord,
+        game.undercoverWord,
+        game.allowLying,
+        JSON.stringify(game.players),
+        game.dealtAt ? new Date(game.dealtAt) : null,
+        game.deal ? JSON.stringify(game.deal) : null,
+        new Date(game.createdAt),
+      ],
+    )
+  }
+
+  async deleteGame(channelId: string): Promise<void> {
+    await this.pool.query('DELETE FROM undercover_games WHERE channel_id = $1', [channelId])
+  }
+}
+
 const games = new Map<string, UndercoverGame>()
+const channelWriteQueues = new Map<string, Promise<unknown>>()
+let store: UndercoverStore = new MemoryUndercoverStore()
+let isPostgresStore = false
+
+export async function initUndercoverDB(): Promise<void> {
+  channelWriteQueues.clear()
+  const dbUrl = process.env.DATABASE_URL
+  if (dbUrl) {
+    try {
+      console.log('🔄 正在尝试连接 PostgreSQL 谁是卧底数据库...')
+      const pgStore = new PGUndercoverStore(dbUrl)
+      await pgStore.init()
+      store = pgStore
+      isPostgresStore = true
+      await reloadGamesFromStore()
+      console.log('✅ PostgreSQL 谁是卧底数据库初始化成功！')
+      console.log(`📋 已加载 ${games.size} 个活跃谁是卧底频道到缓存`)
+      return
+    } catch (error: any) {
+      console.warn('⚠️ 谁是卧底数据库初始化失败，将降级至内存存储模式：', error.message)
+    }
+  } else {
+    console.log('ℹ️ 未检测到 DATABASE_URL，谁是卧底已使用内存存储模式')
+  }
+
+  store = new MemoryUndercoverStore()
+  isPostgresStore = false
+  games.clear()
+}
+
+export function isUsingUndercoverPostgres(): boolean {
+  return isPostgresStore
+}
+
+async function reloadGamesFromStore(): Promise<void> {
+  games.clear()
+  for (const game of await store.loadGames()) {
+    games.set(game.channelId, cloneGame(game))
+  }
+}
+
+async function withChannelWrite<T>(
+  channelId: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const previous = channelWriteQueues.get(channelId) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(action)
+  channelWriteQueues.set(channelId, next)
+
+  try {
+    return await next
+  } finally {
+    if (channelWriteQueues.get(channelId) === next) {
+      channelWriteQueues.delete(channelId)
+    }
+  }
+}
+
+function cloneGame(game: UndercoverGame): UndercoverGame {
+  return {
+    ...game,
+    players: game.players.map(player => ({ ...player })),
+    deal: game.deal
+      ? {
+          ...game.deal,
+          assignments: game.deal.assignments.map(assignment => ({ ...assignment })),
+        }
+      : undefined,
+  }
+}
+
+function parseStoredJson<T>(value: unknown, fallback: T): T {
+  if (value === null || value === undefined) return fallback
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as T
+    } catch {
+      return fallback
+    }
+  }
+  return value as T
+}
+
+function parseStoredPlayers(value: unknown): UndercoverPlayer[] {
+  const raw = parseStoredJson<unknown[]>(value, [])
+  if (!Array.isArray(raw)) return []
+
+  return raw
+    .filter((player: any) => typeof player?.userId === 'string')
+    .map((player: any) => ({
+      userId: player.userId,
+      joinedAt: Number(player.joinedAt) || Date.now(),
+    }))
+}
+
+function parseStoredDeal(value: unknown): UndercoverDealResult | undefined {
+  const raw = parseStoredJson<any>(value, null)
+  if (!raw || typeof raw !== 'object') return undefined
+  if (
+    typeof raw.civilianWord !== 'string' ||
+    typeof raw.undercoverWord !== 'string' ||
+    typeof raw.undercoverUserId !== 'string'
+  ) {
+    return undefined
+  }
+
+  const assignments = Array.isArray(raw.assignments)
+    ? raw.assignments
+        .filter((assignment: any) => (
+          typeof assignment?.userId === 'string' &&
+          (assignment.role === 'civilian' || assignment.role === 'undercover') &&
+          typeof assignment.word === 'string'
+        ))
+        .map((assignment: any) => ({
+          userId: assignment.userId,
+          role: assignment.role,
+          word: assignment.word,
+        }))
+    : []
+
+  return {
+    civilianWord: raw.civilianWord,
+    undercoverWord: raw.undercoverWord,
+    undercoverUserId: raw.undercoverUserId,
+    assignments,
+  }
+}
 
 export function parseUndercoverWordPairs(raw: string): UndercoverWordPair[] {
   return raw
@@ -162,7 +424,7 @@ function sanitizeDisplayName(name: string): string {
 }
 
 export class UndercoverEngine {
-  static startGame(
+  static async startGame(
     channelId: string,
     hostId: string,
     input: {
@@ -171,34 +433,42 @@ export class UndercoverEngine {
       undercoverWord: string
       allowLying: boolean
     },
-  ): {
+  ): Promise<{
     ok: boolean
     game?: UndercoverGame
     error?: string
-  } {
-    if (games.has(channelId)) {
-      return { ok: false, error: '当前频道已有进行中的谁是卧底。' }
-    }
-    if (!input.civilianWord.trim() || !input.undercoverWord.trim()) {
-      return { ok: false, error: '平民词和卧底词都不能为空。' }
-    }
-    if (input.civilianWord.trim() === input.undercoverWord.trim()) {
-      return { ok: false, error: '平民词和卧底词不能相同。' }
-    }
+  }> {
+    return withChannelWrite(channelId, async () => {
+      if (games.has(channelId)) {
+        return { ok: false, error: '当前频道已有进行中的谁是卧底。' }
+      }
+      if (!input.civilianWord.trim() || !input.undercoverWord.trim()) {
+        return { ok: false, error: '平民词和卧底词都不能为空。' }
+      }
+      if (input.civilianWord.trim() === input.undercoverWord.trim()) {
+        return { ok: false, error: '平民词和卧底词不能相同。' }
+      }
 
-    const game: UndercoverGame = {
-      channelId,
-      hostId,
-      wordSource: input.wordSource,
-      civilianWord: input.civilianWord.trim(),
-      undercoverWord: input.undercoverWord.trim(),
-      allowLying: input.allowLying,
-      players: [],
-      createdAt: Date.now(),
-    }
+      const game: UndercoverGame = {
+        channelId,
+        hostId,
+        wordSource: input.wordSource,
+        civilianWord: input.civilianWord.trim(),
+        undercoverWord: input.undercoverWord.trim(),
+        allowLying: input.allowLying,
+        players: [],
+        createdAt: Date.now(),
+      }
 
-    games.set(channelId, game)
-    return { ok: true, game }
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        games.delete(channelId)
+        throw error
+      }
+      return { ok: true, game }
+    })
   }
 
   static hasActiveGame(channelId: string): boolean {
@@ -209,42 +479,72 @@ export class UndercoverEngine {
     return games.get(channelId)
   }
 
-  static setJoinMessage(channelId: string, messageId: string): void {
-    const game = this.requireGame(channelId)
-    game.joinMessageId = messageId
+  static async setJoinMessage(channelId: string, messageId: string): Promise<void> {
+    await withChannelWrite(channelId, async () => {
+      const game = this.requireGame(channelId)
+      const previousMessageId = game.joinMessageId
+      game.joinMessageId = messageId
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.joinMessageId = previousMessageId
+        throw error
+      }
+    })
   }
 
-  static addPlayer(channelId: string, userId: string): {
+  static async addPlayer(channelId: string, userId: string): Promise<{
     added: boolean
     playerCount: number
     reason?: 'no_game' | 'host' | 'duplicate' | 'already_dealt'
-  } {
-    const game = games.get(channelId)
-    if (!game) return { added: false, playerCount: 0, reason: 'no_game' }
-    if (game.dealtAt) {
-      return { added: false, playerCount: game.players.length, reason: 'already_dealt' }
-    }
-    if (game.hostId === userId) {
-      return { added: false, playerCount: game.players.length, reason: 'host' }
-    }
-    if (game.players.some(player => player.userId === userId)) {
-      return { added: false, playerCount: game.players.length, reason: 'duplicate' }
-    }
+  }> {
+    return withChannelWrite(channelId, async () => {
+      const game = games.get(channelId)
+      if (!game) return { added: false, playerCount: 0, reason: 'no_game' }
+      if (game.dealtAt) {
+        return { added: false, playerCount: game.players.length, reason: 'already_dealt' }
+      }
+      if (game.hostId === userId) {
+        return { added: false, playerCount: game.players.length, reason: 'host' }
+      }
+      if (game.players.some(player => player.userId === userId)) {
+        return { added: false, playerCount: game.players.length, reason: 'duplicate' }
+      }
 
-    game.players.push({ userId, joinedAt: Date.now() })
-    return { added: true, playerCount: game.players.length }
+      const previousPlayers = game.players.map(player => ({ ...player }))
+      game.players.push({ userId, joinedAt: Date.now() })
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.players = previousPlayers
+        throw error
+      }
+      return { added: true, playerCount: game.players.length }
+    })
   }
 
-  static removePlayer(channelId: string, userId: string): {
+  static async removePlayer(channelId: string, userId: string): Promise<{
     removed: boolean
     playerCount: number
-  } {
-    const game = games.get(channelId)
-    if (!game || game.dealtAt) return { removed: false, playerCount: game?.players.length ?? 0 }
+  }> {
+    return withChannelWrite(channelId, async () => {
+      const game = games.get(channelId)
+      if (!game || game.dealtAt) return { removed: false, playerCount: game?.players.length ?? 0 }
 
-    const before = game.players.length
-    game.players = game.players.filter(player => player.userId !== userId)
-    return { removed: before !== game.players.length, playerCount: game.players.length }
+      const previousPlayers = game.players.map(player => ({ ...player }))
+      const before = game.players.length
+      game.players = game.players.filter(player => player.userId !== userId)
+      if (before === game.players.length) {
+        return { removed: false, playerCount: game.players.length }
+      }
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.players = previousPlayers
+        throw error
+      }
+      return { removed: true, playerCount: game.players.length }
+    })
   }
 
   static assertHost(channelId: string, userId: string): void {
@@ -254,46 +554,72 @@ export class UndercoverEngine {
     }
   }
 
-  static dealWords(channelId: string, rng: () => number = Math.random): UndercoverDealResult {
-    const game = this.requireGame(channelId)
-    if (game.dealtAt) {
-      throw new Error('本局已经发过词了。')
-    }
-    if (game.players.length < UNDERCOVER_MIN_PLAYERS) {
-      throw new Error(`至少需要 ${UNDERCOVER_MIN_PLAYERS} 名玩家才能发词。`)
-    }
+  static async dealWords(channelId: string, rng: () => number = Math.random): Promise<UndercoverDealResult> {
+    return withChannelWrite(channelId, async () => {
+      const game = this.requireGame(channelId)
+      if (game.dealtAt) {
+        throw new Error('本局已经发过词了。')
+      }
+      if (game.players.length < UNDERCOVER_MIN_PLAYERS) {
+        throw new Error(`至少需要 ${UNDERCOVER_MIN_PLAYERS} 名玩家才能发词。`)
+      }
 
-    const undercoverIndex = Math.min(
-      game.players.length - 1,
-      Math.floor(rng() * game.players.length),
-    )
-    const undercoverUserId = game.players[undercoverIndex].userId
+      const undercoverIndex = Math.min(
+        game.players.length - 1,
+        Math.floor(rng() * game.players.length),
+      )
+      const undercoverUserId = game.players[undercoverIndex].userId
 
-    const result: UndercoverDealResult = {
-      civilianWord: game.civilianWord,
-      undercoverWord: game.undercoverWord,
-      undercoverUserId,
-      assignments: game.players.map(player => {
-        const isUndercover = player.userId === undercoverUserId
-        return {
-          userId: player.userId,
-          role: isUndercover ? 'undercover' : 'civilian',
-          word: isUndercover ? game.undercoverWord : game.civilianWord,
-        }
-      }),
-    }
+      const result: UndercoverDealResult = {
+        civilianWord: game.civilianWord,
+        undercoverWord: game.undercoverWord,
+        undercoverUserId,
+        assignments: game.players.map(player => {
+          const isUndercover = player.userId === undercoverUserId
+          return {
+            userId: player.userId,
+            role: isUndercover ? 'undercover' : 'civilian',
+            word: isUndercover ? game.undercoverWord : game.civilianWord,
+          }
+        }),
+      }
 
-    game.dealtAt = Date.now()
-    game.deal = result
-    return result
+      const previousDealtAt = game.dealtAt
+      const previousDeal = game.deal
+      game.dealtAt = Date.now()
+      game.deal = result
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.dealtAt = previousDealtAt
+        game.deal = previousDeal
+        throw error
+      }
+      return result
+    })
   }
 
-  static endGame(channelId: string): boolean {
-    return games.delete(channelId)
+  static async endGame(channelId: string): Promise<boolean> {
+    return withChannelWrite(channelId, async () => {
+      if (!games.has(channelId)) return false
+      await store.deleteGame(channelId)
+      return games.delete(channelId)
+    })
   }
 
-  static resetAllForTest(): void {
+  static async resetAllForTest(): Promise<void> {
+    store = new MemoryUndercoverStore()
+    isPostgresStore = false
+    channelWriteQueues.clear()
     games.clear()
+  }
+
+  static clearCacheForTest(): void {
+    games.clear()
+  }
+
+  static async reloadFromStoreForTest(): Promise<void> {
+    await reloadGamesFromStore()
   }
 
   private static requireGame(channelId: string): UndercoverGame {

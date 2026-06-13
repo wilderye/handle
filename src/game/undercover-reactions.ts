@@ -21,7 +21,7 @@ export async function handleUndercoverReactionAdd(
     return
   }
 
-  const result = UndercoverEngine.addPlayer(channelId, user.id)
+  const result = await UndercoverEngine.addPlayer(channelId, user.id)
   if (!result.added && (result.reason === 'host' || result.reason === 'duplicate')) {
     if (reaction.partial) {
       try {
@@ -52,5 +52,5 @@ export async function handleUndercoverReactionRemove(
     return
   }
 
-  UndercoverEngine.removePlayer(channelId, user.id)
+  await UndercoverEngine.removePlayer(channelId, user.id)
 }

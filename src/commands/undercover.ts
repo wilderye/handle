@@ -199,7 +199,7 @@ async function createPreparedGame(
     return
   }
 
-  const result = UndercoverEngine.startGame(channelId, interaction.user.id, {
+  const result = await UndercoverEngine.startGame(channelId, interaction.user.id, {
     wordSource,
     civilianWord: pair.civilian,
     undercoverWord: pair.undercover,
@@ -223,7 +223,7 @@ async function createPreparedGame(
   }) + roleMsg))
 
   const message = await interaction.fetchReply()
-  UndercoverEngine.setJoinMessage(channelId, message.id)
+  await UndercoverEngine.setJoinMessage(channelId, message.id)
 
   try {
     await message.react(UNDERCOVER_JOIN_EMOJI)
@@ -282,16 +282,17 @@ async function handleRegistrationNotice(interaction: ChatInputCommandInteraction
     return
   }
 
+  await interaction.deferReply()
+
   const role = await interaction.guild?.roles.fetch(UNDERCOVER_NOTIFY_ROLE_ID).catch(() => null)
   if (!role) {
-    await interaction.reply({
+    await interaction.editReply({
       content: `⚠️ 未找到「小心她人！」身份组：${UNDERCOVER_NOTIFY_ROLE_ID}`,
-      ephemeral: true,
     })
     return
   }
 
-  await interaction.reply({
+  await interaction.editReply({
     content: `📢 <@&${UNDERCOVER_NOTIFY_ROLE_ID}> 谁是卧底开玩啦，来报名！`,
     allowedMentions: { roles: [UNDERCOVER_NOTIFY_ROLE_ID] },
   })
@@ -309,12 +310,13 @@ async function handleEnd(interaction: ChatInputCommandInteraction) {
     return
   }
 
+  await interaction.deferReply()
   const endContent = await buildEndContent(interaction, game)
-  UndercoverEngine.endGame(interaction.channelId)
-  await interaction.reply(panel(endContent))
+  await interaction.editReply(panel(endContent))
+  await UndercoverEngine.endGame(interaction.channelId)
 
   if (interaction.guild) {
-    removeHostRoleFromMember(interaction.guild, game.hostId, '谁是卧底结束').catch(() => undefined)
+    await removeHostRoleFromMember(interaction.guild, game.hostId, '谁是卧底结束')
   }
 }
 
@@ -375,7 +377,7 @@ async function dealAndNotify(interaction: ChatInputCommandInteraction) {
 
   let result
   try {
-    result = UndercoverEngine.dealWords(channelId)
+    result = await UndercoverEngine.dealWords(channelId)
   } catch (error: any) {
     await interaction.editReply(`❌ ${error.message}`)
     return

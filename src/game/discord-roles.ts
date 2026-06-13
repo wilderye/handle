@@ -80,5 +80,9 @@ export async function removeHostRoleFromMember(
   const member = await guild.members.fetch(userId).catch(() => null)
   if (!member) return
 
-  await member.roles.remove(role.id, reason).catch(() => undefined)
+  try {
+    await member.roles.remove(role.id, reason)
+  } catch (error) {
+    console.error('[Roles] 移除主持人身份组失败:', error)
+  }
 }

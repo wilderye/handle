@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execute as executeUndercoverCommand } from './commands/undercover.js'
 import {
   UndercoverEngine,
   formatEndReveal,
@@ -11,7 +12,7 @@ import {
 
 console.log('🧪 开始谁是卧底核心逻辑测试...\n')
 
-UndercoverEngine.resetAllForTest()
+await UndercoverEngine.resetAllForTest()
 
 const parsedPairs = parseUndercoverWordPairs(`
 苹果 梨
@@ -30,7 +31,7 @@ console.log('✅ 词库解析支持空行、Tab 和特殊空格')
 const channelId = 'undercover-test-channel'
 const hostId = 'host-user'
 
-const start = UndercoverEngine.startGame(channelId, hostId, {
+const start = await UndercoverEngine.startGame(channelId, hostId, {
   wordSource: 'custom',
   civilianWord: '苹果',
   undercoverWord: '梨',
@@ -52,19 +53,19 @@ assert.throws(
 assert.doesNotThrow(() => UndercoverEngine.assertHost(channelId, hostId))
 console.log('✅ 主持人权限通过创建者数字 ID 判断')
 
-assert.equal(UndercoverEngine.addPlayer(channelId, 'u1').added, true)
-assert.equal(UndercoverEngine.addPlayer(channelId, 'u1').added, false)
-assert.equal(UndercoverEngine.addPlayer(channelId, 'u2').added, true)
+assert.equal((await UndercoverEngine.addPlayer(channelId, 'u1')).added, true)
+assert.equal((await UndercoverEngine.addPlayer(channelId, 'u1')).added, false)
+assert.equal((await UndercoverEngine.addPlayer(channelId, 'u2')).added, true)
 
-assert.throws(
+await assert.rejects(
   () => UndercoverEngine.dealWords(channelId, () => 0),
   /至少需要 3 名玩家/,
 )
 
-assert.equal(UndercoverEngine.addPlayer(channelId, 'u3').added, true)
+assert.equal((await UndercoverEngine.addPlayer(channelId, 'u3')).added, true)
 console.log('✅ 报名状态支持去重，并阻止少于 3 人正式开始')
 
-const dealResult = UndercoverEngine.dealWords(channelId, () => 0)
+const dealResult = await UndercoverEngine.dealWords(channelId, () => 0)
 
 assert.equal(dealResult.undercoverUserId, 'u1')
 assert.deepEqual(
@@ -75,8 +76,8 @@ assert.deepEqual(
     { userId: 'u3', role: 'civilian', word: '苹果' },
   ],
 )
-assert.equal(UndercoverEngine.addPlayer(channelId, 'u4').reason, 'already_dealt')
-assert.equal(UndercoverEngine.removePlayer(channelId, 'u2').removed, false)
+assert.equal((await UndercoverEngine.addPlayer(channelId, 'u4')).reason, 'already_dealt')
+assert.equal((await UndercoverEngine.removePlayer(channelId, 'u2')).removed, false)
 console.log('✅ 正式开始会随机选出 1 名卧底、生成词语分配，并冻结报名')
 
 const speechOrder = formatSpeechOrder([
@@ -129,11 +130,11 @@ assert.equal(
 )
 console.log('✅ 正式开始后结束公开信息包含平民词、卧底词和卧底')
 
-UndercoverEngine.endGame(channelId)
+await UndercoverEngine.endGame(channelId)
 assert.equal(UndercoverEngine.hasActiveGame(channelId), false)
 
 const preparedChannelId = 'undercover-prepared-channel'
-const prepared = UndercoverEngine.startGame(preparedChannelId, hostId, {
+const prepared = await UndercoverEngine.startGame(preparedChannelId, hostId, {
   wordSource: 'random',
   civilianWord: '猫',
   undercoverWord: '狗',
@@ -154,6 +155,64 @@ assert.equal(
 )
 console.log('✅ 未正式开始时结束会说明卧底尚未分配，并公布已准备词语')
 
-UndercoverEngine.resetAllForTest()
+const reloadChannelId = 'undercover-reload-channel'
+const reloadStart = await UndercoverEngine.startGame(reloadChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '月亮',
+  undercoverWord: '太阳',
+  allowLying: true,
+})
+assert.equal(reloadStart.ok, true)
+await UndercoverEngine.setJoinMessage(reloadChannelId, 'join-message-1')
+await UndercoverEngine.addPlayer(reloadChannelId, 'r1')
+await UndercoverEngine.addPlayer(reloadChannelId, 'r2')
+await UndercoverEngine.addPlayer(reloadChannelId, 'r3')
+const reloadDeal = await UndercoverEngine.dealWords(reloadChannelId, () => 0)
+assert.equal(reloadDeal.undercoverUserId, 'r1')
+
+UndercoverEngine.clearCacheForTest()
+assert.equal(UndercoverEngine.hasActiveGame(reloadChannelId), false)
+await UndercoverEngine.reloadFromStoreForTest()
+const reloadedGame = UndercoverEngine.getGame(reloadChannelId)
+assert.equal(reloadedGame?.joinMessageId, 'join-message-1')
+assert.deepEqual(reloadedGame?.players.map(player => player.userId), ['r1', 'r2', 'r3'])
+assert.equal(reloadedGame?.deal?.undercoverUserId, 'r1')
+await UndercoverEngine.endGame(reloadChannelId)
+UndercoverEngine.clearCacheForTest()
+await UndercoverEngine.reloadFromStoreForTest()
+assert.equal(UndercoverEngine.hasActiveGame(reloadChannelId), false)
+console.log('✅ 谁是卧底状态写入存储，并可在重载缓存后恢复和删除')
+
+const failingEndChannelId = 'undercover-failing-end-channel'
+const failingEndGame = await UndercoverEngine.startGame(failingEndChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '西瓜',
+  undercoverWord: '哈密瓜',
+  allowLying: false,
+})
+assert.equal(failingEndGame.ok, true)
+
+const replyFailure = new Error('simulated Discord interaction response failure')
+await assert.rejects(
+  () => executeUndercoverCommand({
+    guild: {},
+    channelId: failingEndChannelId,
+    user: { id: hostId },
+    options: { getSubcommand: () => '结束' },
+    deferReply: async () => undefined,
+    reply: async () => {
+      throw replyFailure
+    },
+    editReply: async () => {
+      throw replyFailure
+    },
+  } as any),
+  /simulated Discord interaction response failure/,
+)
+assert.equal(UndercoverEngine.hasActiveGame(failingEndChannelId), true)
+await UndercoverEngine.endGame(failingEndChannelId)
+console.log('✅ 结束命令回复失败时不会提前删除游戏状态，主持人可重试结束')
+
+await UndercoverEngine.resetAllForTest()
 
 console.log('\n🎉 谁是卧底核心逻辑测试全部通过！')
