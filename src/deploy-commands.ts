@@ -6,10 +6,10 @@ import { commands } from './commands/index.js'
 config()
 
 const token = process.env.DISCORD_TOKEN
-const clientId = process.env.CLIENT_ID
+const clientId = process.env.CLIENT_ID || process.env.DISCORD_CLIENT_ID
 
 if (!token || !clientId) {
-  console.error('❌ 错误：缺少 DISCORD_TOKEN 或 CLIENT_ID 环境变量')
+  console.error('❌ 错误：缺少 DISCORD_TOKEN 或 CLIENT_ID/DISCORD_CLIENT_ID 环境变量')
   process.exit(1)
 }
 
