@@ -292,17 +292,23 @@ async function handleRegistrationNotice(interaction: ChatInputCommandInteraction
     return
   }
 
-  await interaction.deferReply()
+  const guild = interaction.guild
+  if (!guild) {
+    await interaction.reply({ content: '❌ 谁是卧底只能在服务器频道中使用。', ephemeral: true })
+    return
+  }
 
-  const role = await interaction.guild?.roles.fetch(UNDERCOVER_NOTIFY_ROLE_ID).catch(() => null)
+  const role = guild.roles.cache.get(UNDERCOVER_NOTIFY_ROLE_ID)
+    ?? await guild.roles.fetch(UNDERCOVER_NOTIFY_ROLE_ID).catch(() => null)
   if (!role) {
-    await interaction.editReply({
+    await interaction.reply({
       content: `⚠️ 未找到「小心她人！」身份组：${UNDERCOVER_NOTIFY_ROLE_ID}`,
+      ephemeral: true,
     })
     return
   }
 
-  await interaction.editReply({
+  await interaction.reply({
     content: `📢 <@&${UNDERCOVER_NOTIFY_ROLE_ID}> 谁是卧底开玩啦，来报名！`,
     allowedMentions: { roles: [UNDERCOVER_NOTIFY_ROLE_ID] },
   })
