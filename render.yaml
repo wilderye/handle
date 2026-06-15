@@ -8,5 +8,3 @@ services:
         sync: false  # 需要在 Render Dashboard 手动填入
       - key: DISCORD_CLIENT_ID
         sync: false
-      - key: WARP_PRIVATE_KEY
-        sync: false  # wgcf 生成的私钥，在 Render Dashboard 手动填入

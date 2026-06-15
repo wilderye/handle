@@ -68,7 +68,7 @@ const pageButtons = (page: number, total: number, uid: string) => ({
   ],
 });
 
-// ── 名字缓存（避免重复 REST 调用经 WARP 代理） ──
+// ── 名字缓存（避免重复 REST 调用） ──
 const nameCache = new Map<string, { name: string; ts: number }>();
 const NAME_CACHE_TTL = 10 * 60 * 1000; // 10 分钟
 
@@ -103,7 +103,7 @@ async function buildHistoryPage(interaction: any, questions: any[], page: number
   }
   const start = (page - 1) * PER_PAGE;
   const slice = questions.slice(start, start + PER_PAGE);
-  // 并行解析所有用户名（经 WARP 的 REST 调用）
+  // 并行解析所有用户名
   const names = await Promise.all(slice.map(q => resolveDisplayName(interaction, q.userId)));
   let lines = '';
   for (let i = 0; i < slice.length; i++) {
