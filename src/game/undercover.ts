@@ -349,6 +349,20 @@ export function formatSpeechOrder(players: DisplayPlayer[]): string {
   return `**建议发言顺序：**\n${lines.join('\n')}`
 }
 
+export function shuffleSpeechOrder(
+  players: DisplayPlayer[],
+  rng: () => number = Math.random,
+): DisplayPlayer[] {
+  const shuffled = players.map(player => ({ ...player }))
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.min(index, Math.floor(rng() * (index + 1)))
+    const current = shuffled[index]
+    shuffled[index] = shuffled[swapIndex]
+    shuffled[swapIndex] = current
+  }
+  return shuffled
+}
+
 export function formatBooleanRule(value: boolean): string {
   return value ? '是' : '否'
 }

@@ -16,6 +16,7 @@ import {
   formatPreparedEnd,
   formatSpeechOrder,
   getRandomUndercoverWordPair,
+  shuffleSpeechOrder,
   UndercoverEngine,
   UNDERCOVER_JOIN_EMOJI,
   UNDERCOVER_MIN_PLAYERS,
@@ -460,7 +461,7 @@ async function dealAndNotify(interaction: ChatInputCommandInteraction) {
   const publicContent =
     `## 🎭 正式开始，请查看私信。\n` +
     `**可否撒谎：**${formatBooleanRule(game.allowLying)}${failedSection}\n\n` +
-    formatSpeechOrder(displayPlayers)
+    formatSpeechOrder(shuffleSpeechOrder(displayPlayers))
 
   await channel.send(panel(publicContent))
 

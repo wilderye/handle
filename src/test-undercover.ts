@@ -9,12 +9,18 @@ import {
   formatPreparedEnd,
   formatSpeechOrder,
   parseUndercoverWordPairs,
+  shuffleSpeechOrder,
 } from './game/undercover.js'
 
 console.log('🧪 开始谁是卧底核心逻辑测试...\n')
 
 function getPanelText(payload: any): string {
   return payload?.components?.[0]?.components?.[0]?.content ?? ''
+}
+
+function sequenceRng(values: number[]): () => number {
+  let index = 0
+  return () => values[index++] ?? 0
 }
 
 await UndercoverEngine.resetAllForTest()
@@ -97,6 +103,22 @@ assert.equal(
 )
 assert.equal(speechOrder.includes('<@'), false)
 console.log('✅ 公开发言顺序使用服务器昵称，不艾特玩家')
+
+const originalSpeechPlayers = [
+  { userId: 'u1', displayName: '用户A' },
+  { userId: 'u2', displayName: '用户B' },
+  { userId: 'u3', displayName: '用户C' },
+]
+const shuffledSpeechPlayers = shuffleSpeechOrder(originalSpeechPlayers, sequenceRng([0, 0]))
+assert.deepEqual(
+  shuffledSpeechPlayers.map(player => player.userId),
+  ['u2', 'u3', 'u1'],
+)
+assert.deepEqual(
+  originalSpeechPlayers.map(player => player.userId),
+  ['u1', 'u2', 'u3'],
+)
+console.log('✅ 正式开始会随机打乱公开发言顺序，并保留原报名顺序')
 
 const lobbyMessage = formatLobbyMessage({
   hostName: '主持人A',
