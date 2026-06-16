@@ -609,6 +609,20 @@ export function formatUndercoverVoteStatus(input: {
     : '**当前得票：**\n暂无投票'
 }
 
+export function getVoteReminderOffsets(totalMs: number): number[] {
+  const minute = 60_000
+  const candidates = [
+    10 * minute,
+    5 * minute,
+    minute,
+  ]
+  return candidates.filter(offset => totalMs > offset)
+}
+
+export function shouldSendVoteEndingSoon(totalMs: number): boolean {
+  return totalMs >= 60_000
+}
+
 export function shuffleSpeechOrder(
   players: DisplayPlayer[],
   rng: () => number = Math.random,
@@ -1121,10 +1135,10 @@ export class UndercoverEngine {
     })
   }
 
-  static async setVoteMessage(channelId: string, messageId: string): Promise<void> {
-    await withChannelWrite(channelId, async () => {
+  static async setVoteMessage(channelId: string, messageId: string): Promise<string | undefined> {
+    return withChannelWrite(channelId, async () => {
       const game = normalizeGame(this.requireGame(channelId))
-      if (!game.currentVote) return
+      if (!game.currentVote) return undefined
       const previous = game.currentVote.messageId
       game.currentVote.messageId = messageId
       games.set(channelId, game)
@@ -1135,6 +1149,7 @@ export class UndercoverEngine {
         games.set(channelId, game)
         throw error
       }
+      return previous
     })
   }
 
@@ -1228,6 +1243,10 @@ export class UndercoverEngine {
       await store.deleteGame(channelId)
       return games.delete(channelId)
     })
+  }
+
+  static getActiveGames(): UndercoverGame[] {
+    return Array.from(games.values()).map(game => normalizeGame(game))
   }
 
   static async resetAllForTest(): Promise<void> {

@@ -2,6 +2,7 @@ import {
   ActionRowBuilder,
   ButtonInteraction,
   ChatInputCommandInteraction,
+  Client,
   ModalBuilder,
   ModalSubmitInteraction,
   SlashCommandBuilder,
@@ -20,8 +21,10 @@ import {
   formatUndercoverVoteStatus,
   formatPreparedEnd,
   formatSpeechOrder,
+  getVoteReminderOffsets,
   getRandomUndercoverWordPair,
   shuffleSpeechOrder,
+  shouldSendVoteEndingSoon,
   UndercoverEngine,
   UNDERCOVER_JOIN_EMOJI,
   UNDERCOVER_MIN_PLAYERS,
@@ -66,6 +69,15 @@ const UNDERCOVER_HISTORY_PAGE_PREFIX = 'undercover_history_page_'
 const UNDERCOVER_CLOSE_VOTE_BUTTON_ID = 'undercover_vote_close'
 
 type UndercoverInteraction = ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction
+type UndercoverRuntimeContext = UndercoverInteraction | {
+  client: Client
+  channel: any
+  channelId: string
+  guild?: any
+}
+
+const VOTE_ENDING_SOON_MS = 30_000
+const voteTimers = new Map<string, Array<ReturnType<typeof setTimeout>>>()
 
 export const data = new SlashCommandBuilder()
   .setName('卧底')
@@ -365,6 +377,20 @@ async function handleStartVote(interaction: ChatInputCommandInteraction) {
   }
 
   const discussionMinutes = interaction.options.getInteger(DISCUSSION_MINUTES_OPTION)
+  if (game.currentVote) {
+    await interaction.reply(await buildVotePanel(interaction, game))
+    const message = await interaction.fetchReply()
+    const previousMessageId = await UndercoverEngine.setVoteMessage(interaction.channelId, message.id)
+    await deleteChannelMessage(interaction, previousMessageId)
+    await interaction.followUp({
+      content: discussionMinutes
+        ? '当前投票已在进行中，已重新发布投票面板，讨论时间不变。'
+        : '已重新发布当前投票面板。',
+      ephemeral: true,
+    })
+    return
+  }
+
   const result = await UndercoverEngine.startVote(interaction.channelId, discussionMinutes)
   if (!result.ok) {
     await interaction.reply({ content: `❌ ${result.error ?? '无法开始投票。'}`, ephemeral: true })
@@ -380,7 +406,7 @@ async function handleStartVote(interaction: ChatInputCommandInteraction) {
   await interaction.reply(await buildVotePanel(interaction, voteGame))
   const message = await interaction.fetchReply()
   await UndercoverEngine.setVoteMessage(interaction.channelId, message.id)
-  scheduleVoteClose(interaction, interaction.channelId, discussionMinutes ?? undefined)
+  scheduleVoteTimers(interaction, interaction.channelId, voteGame.currentVote?.endsAt)
 }
 
 async function handleRegistrationNotice(interaction: ChatInputCommandInteraction) {
@@ -471,6 +497,7 @@ async function handleEnd(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply()
   const endContent = await buildEndContent(interaction, game)
   await interaction.editReply(panel(endContent))
+  clearVoteTimers(interaction.channelId)
   await UndercoverEngine.endGame(interaction.channelId)
 
   if (interaction.guild) {
@@ -590,7 +617,7 @@ function voteSelectRow(players: Array<{ userId: string; number: number; displayN
 }
 
 async function getDisplayNumberedPlayers(
-  interaction: UndercoverInteraction,
+  interaction: UndercoverRuntimeContext,
   game: UndercoverGame,
   userIds?: string[],
 ) {
@@ -657,7 +684,7 @@ async function sendSpeechPanel(
   await UndercoverEngine.setSpeechMessage(channelId, message.id)
 }
 
-async function buildVotePanel(interaction: UndercoverInteraction, game: UndercoverGame) {
+async function buildVotePanel(interaction: UndercoverRuntimeContext, game: UndercoverGame) {
   const aliveUserIds = game.aliveUserIds && game.aliveUserIds.length > 0
     ? game.aliveUserIds
     : game.players.map(player => player.userId)
@@ -674,6 +701,132 @@ async function buildVotePanel(interaction: UndercoverInteraction, game: Undercov
     `\n${formatUndercoverVoteStatus({ candidates, votes: vote?.votes ?? {} })}`,
     [voteActionRow()],
   )
+}
+
+async function replaceCurrentVotePanel(
+  context: UndercoverRuntimeContext,
+  channelId: string,
+  expectedEndsAt?: number,
+) {
+  const game = UndercoverEngine.getGame(channelId)
+  if (!game?.currentVote) return
+  if (expectedEndsAt !== undefined && game.currentVote.endsAt !== expectedEndsAt) return
+
+  const channel = context.channel
+  if (!channel || !('send' in channel)) return
+
+  const message = await channel.send(await buildVotePanel(context, game))
+  const previousMessageId = await UndercoverEngine.setVoteMessage(channelId, message.id)
+  await deleteChannelMessage(context, previousMessageId)
+}
+
+function clearVoteTimers(channelId: string) {
+  const timers = voteTimers.get(channelId)
+  if (!timers) return
+  for (const timer of timers) {
+    clearTimeout(timer)
+  }
+  voteTimers.delete(channelId)
+}
+
+function rememberVoteTimer(channelId: string, timer: ReturnType<typeof setTimeout>) {
+  const timers = voteTimers.get(channelId) ?? []
+  timers.push(timer)
+  voteTimers.set(channelId, timers)
+}
+
+function scheduleVoteTimers(
+  context: UndercoverRuntimeContext,
+  channelId: string,
+  endsAt?: number,
+) {
+  clearVoteTimers(channelId)
+  if (!endsAt) return
+
+  const now = Date.now()
+  const remainingMs = endsAt - now
+  if (remainingMs <= 0) {
+    void closeVoteByTimer(context, channelId, endsAt).catch(error => {
+      console.error('[Undercover] 自动结束投票失败:', error)
+    })
+    return
+  }
+
+  const game = UndercoverEngine.getGame(channelId)
+  const totalMs = game?.currentVote?.startedAt
+    ? endsAt - game.currentVote.startedAt
+    : remainingMs
+
+  for (const offset of getVoteReminderOffsets(totalMs)) {
+    const delay = remainingMs - offset
+    if (delay <= 0) continue
+    rememberVoteTimer(channelId, setTimeout(() => {
+      void replaceCurrentVotePanel(context, channelId, endsAt).catch(error => {
+        console.error('[Undercover] 下沉投票面板失败:', error)
+      })
+    }, delay))
+  }
+
+  const shouldSendEndingSoon = shouldSendVoteEndingSoon(totalMs)
+  const endingSoonDelay = remainingMs - VOTE_ENDING_SOON_MS
+  if (shouldSendEndingSoon && endingSoonDelay > 0) {
+    rememberVoteTimer(channelId, setTimeout(() => {
+      void sendVoteEndingSoon(context, channelId, endsAt).catch(error => {
+        console.error('[Undercover] 发送投票结束提醒失败:', error)
+      })
+    }, endingSoonDelay))
+  }
+
+  rememberVoteTimer(channelId, setTimeout(() => {
+    void closeVoteByTimer(context, channelId, endsAt).catch(error => {
+      console.error('[Undercover] 自动结束投票失败:', error)
+    })
+  }, remainingMs))
+}
+
+async function sendVoteEndingSoon(
+  context: UndercoverRuntimeContext,
+  channelId: string,
+  expectedEndsAt: number,
+) {
+  const game = UndercoverEngine.getGame(channelId)
+  if (!game?.currentVote || game.currentVote.endsAt !== expectedEndsAt) return
+  const channel = context.channel
+  if (!channel || !('send' in channel)) return
+  await channel.send('投票即将在 30 秒后结束。').catch(() => undefined)
+}
+
+async function closeVoteByTimer(
+  context: UndercoverRuntimeContext,
+  channelId: string,
+  expectedEndsAt: number,
+) {
+  const game = UndercoverEngine.getGame(channelId)
+  if (!game?.currentVote || game.currentVote.endsAt !== expectedEndsAt) return
+
+  clearVoteTimers(channelId)
+  const voteMessageId = game.currentVote.messageId
+  const result = await UndercoverEngine.closeVote(channelId)
+  await editVoteMessageClosed(context, voteMessageId)
+  await announceVoteResult(context, game, result.result)
+}
+
+export async function resumeUndercoverVoteTimers(client: Client) {
+  for (const game of UndercoverEngine.getActiveGames()) {
+    const endsAt = game.currentVote?.endsAt
+    if (!endsAt) continue
+
+    const channel = await client.channels.fetch(game.channelId).catch(() => null)
+    if (!channel || !('send' in channel)) continue
+
+    const context: UndercoverRuntimeContext = {
+      client,
+      channel,
+      channelId: game.channelId,
+      guild: 'guild' in channel ? channel.guild : undefined,
+    }
+    scheduleVoteTimers(context, game.channelId, endsAt)
+  }
 }
 
 async function buildHistoryPanel(
@@ -995,6 +1148,7 @@ async function handleCloseVoteButton(interaction: ButtonInteraction) {
   }
 
   await interaction.deferUpdate()
+  clearVoteTimers(interaction.channelId)
   const voteMessageId = game.currentVote.messageId
   const result = await UndercoverEngine.closeVote(interaction.channelId)
   await editVoteMessageClosed(interaction, voteMessageId)
@@ -1015,7 +1169,7 @@ async function refreshVoteMessage(interaction: UndercoverInteraction) {
   await message.edit(await buildVotePanel(interaction, game)).catch(() => undefined)
 }
 
-async function editVoteMessageClosed(interaction: UndercoverInteraction, messageId?: string) {
+async function editVoteMessageClosed(interaction: UndercoverRuntimeContext, messageId?: string) {
   if (!messageId) return
   const channel = interaction.channel
   if (!channel || !('messages' in channel)) return
@@ -1024,7 +1178,7 @@ async function editVoteMessageClosed(interaction: UndercoverInteraction, message
   await message.edit(panelWithRows('## 🗳️ 投票已结束\n\n本轮投票已经结算。', [voteActionRow(true)])).catch(() => undefined)
 }
 
-async function deleteChannelMessage(interaction: UndercoverInteraction, messageId?: string) {
+async function deleteChannelMessage(interaction: UndercoverRuntimeContext, messageId?: string) {
   if (!messageId) return
   const channel = interaction.channel
   if (!channel || !('messages' in channel)) return
@@ -1034,7 +1188,7 @@ async function deleteChannelMessage(interaction: UndercoverInteraction, messageI
 }
 
 async function announceVoteResult(
-  interaction: UndercoverInteraction,
+  interaction: UndercoverRuntimeContext,
   gameBeforeClose: UndercoverGame,
   result?: Awaited<ReturnType<typeof UndercoverEngine.closeVote>>['result'],
 ) {
@@ -1073,23 +1227,8 @@ async function announceVoteResult(
   ))
 }
 
-function scheduleVoteClose(
-  interaction: UndercoverInteraction,
-  channelId: string,
-  discussionMinutes?: number,
-) {
-  if (!discussionMinutes || discussionMinutes <= 0) return
-  setTimeout(async () => {
-    const game = UndercoverEngine.getGame(channelId)
-    if (!game?.currentVote) return
-    const result = await UndercoverEngine.closeVote(channelId)
-    await editVoteMessageClosed(interaction, game.currentVote.messageId)
-    await announceVoteResult(interaction, game, result.result)
-  }, discussionMinutes * 60_000)
-}
-
 async function resolveDisplayName(
-  interaction: UndercoverInteraction,
+  interaction: UndercoverRuntimeContext,
   userId: string,
 ): Promise<string> {
   const member = await interaction.guild?.members.fetch(userId).catch(() => null)

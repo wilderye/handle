@@ -14,7 +14,7 @@ import { initUndercoverDB } from "./game/undercover.js";
 import { handleReactionAdd, handleReactionRemove } from "./game/soup-reactions.js";
 import { handleSoupButton } from "./commands/soup.js";
 import { handleUndercoverReactionAdd, handleUndercoverReactionRemove } from "./game/undercover-reactions.js";
-import { handleUndercoverButton, handleUndercoverModal, handleUndercoverSelect } from "./commands/undercover.js";
+import { handleUndercoverButton, handleUndercoverModal, handleUndercoverSelect, resumeUndercoverVoteTimers } from "./commands/undercover.js";
 
 // 加载环境变量
 config();
@@ -92,6 +92,7 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   // 设置 Bot 状态
   readyClient.user.setActivity("被禁闭在卡尔克萨的哈利湖中");
+  await resumeUndercoverVoteTimers(readyClient);
 
   // 预热 Puppeteer 浏览器 (Canvas 模式下无需预热)
   // await warmupBrowser()

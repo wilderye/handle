@@ -10,8 +10,10 @@ import {
   formatUndercoverVoteOptions,
   formatPreparedEnd,
   formatSpeechOrder,
+  getVoteReminderOffsets,
   parseUndercoverWordPairs,
   shuffleSpeechOrder,
+  shouldSendVoteEndingSoon,
 } from './game/undercover.js'
 
 console.log('🧪 开始谁是卧底核心逻辑测试...\n')
@@ -188,6 +190,15 @@ assert.equal(voteClose.result?.eliminatedUserId, 'u2')
 assert.deepEqual(UndercoverEngine.getGame(channelId)?.aliveUserIds, ['u1', 'u3'])
 assert.deepEqual(UndercoverEngine.getGame(channelId)?.fixedPlayers?.map(player => player.number), [1, 2, 3])
 console.log('✅ 投票支持改票、平票不淘汰、唯一最高票淘汰且不重排序号')
+
+assert.deepEqual(getVoteReminderOffsets(60_000), [])
+assert.deepEqual(getVoteReminderOffsets(3 * 60_000), [60_000])
+assert.deepEqual(getVoteReminderOffsets(5 * 60_000), [60_000])
+assert.deepEqual(getVoteReminderOffsets(8 * 60_000), [5 * 60_000, 60_000])
+assert.deepEqual(getVoteReminderOffsets(20 * 60_000), [10 * 60_000, 5 * 60_000, 60_000])
+assert.equal(shouldSendVoteEndingSoon(59_999), false)
+assert.equal(shouldSendVoteEndingSoon(60_000), true)
+console.log('✅ 投票面板下沉提醒按总时长分档，并避免开票时立刻重复下沉')
 
 const nextSpeech = await UndercoverEngine.startSpeechRound(channelId, () => 0)
 assert.equal(nextSpeech.ok, true)
@@ -379,6 +390,10 @@ await UndercoverEngine.startSpeechRound(reloadChannelId, () => 0)
 await UndercoverEngine.submitSpeech(reloadChannelId, 'r2', '重载前发言')
 await UndercoverEngine.startVote(reloadChannelId, 3)
 await UndercoverEngine.castVote(reloadChannelId, 'r1', 'r2')
+assert.equal(await UndercoverEngine.setVoteMessage(reloadChannelId, 'old-vote-message'), undefined)
+assert.equal(await UndercoverEngine.setVoteMessage(reloadChannelId, 'new-vote-message'), 'old-vote-message')
+assert.equal(UndercoverEngine.getGame(reloadChannelId)?.currentVote?.messageId, 'new-vote-message')
+console.log('✅ 更新当前投票面板 ID 时会返回旧面板 ID，便于保持频道内只有一个投票面板')
 
 UndercoverEngine.clearCacheForTest()
 assert.equal(UndercoverEngine.hasActiveGame(reloadChannelId), false)
@@ -391,11 +406,78 @@ assert.deepEqual(reloadedGame?.fixedPlayers?.map(player => player.number), [1, 2
 assert.deepEqual(reloadedGame?.aliveUserIds, ['r1', 'r2', 'r3'])
 assert.deepEqual(reloadedGame?.currentSpeech?.entries.map(entry => entry.content), ['重载前发言'])
 assert.deepEqual(reloadedGame?.currentVote?.votes, { r1: 'r2' })
+assert.equal(reloadedGame?.currentVote?.messageId, 'new-vote-message')
 await UndercoverEngine.endGame(reloadChannelId)
 UndercoverEngine.clearCacheForTest()
 await UndercoverEngine.reloadFromStoreForTest()
 assert.equal(UndercoverEngine.hasActiveGame(reloadChannelId), false)
 console.log('✅ 谁是卧底状态写入存储，并可在重载缓存后恢复和删除')
+
+const resurfaceChannelId = 'undercover-resurface-channel'
+await UndercoverEngine.startGame(resurfaceChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '咖啡',
+  undercoverWord: '奶茶',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(resurfaceChannelId, 'v1')
+await UndercoverEngine.addPlayer(resurfaceChannelId, 'v2')
+await UndercoverEngine.addPlayer(resurfaceChannelId, 'v3')
+await UndercoverEngine.dealWords(resurfaceChannelId, () => 0)
+await UndercoverEngine.startVote(resurfaceChannelId, 5)
+await UndercoverEngine.castVote(resurfaceChannelId, 'v1', 'v2')
+await UndercoverEngine.setVoteMessage(resurfaceChannelId, 'old-panel')
+const originalVote = UndercoverEngine.getGame(resurfaceChannelId)?.currentVote
+let deletedOldPanel = false
+let resurfaceReply: any
+let resurfaceFollowUp: any
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  channelId: resurfaceChannelId,
+  channel: {
+    messages: {
+      fetch: async (messageId: string) => {
+        assert.equal(messageId, 'old-panel')
+        return {
+          delete: async () => {
+            deletedOldPanel = true
+          },
+        }
+      },
+    },
+  },
+  user: { id: hostId },
+  options: {
+    getSubcommand: () => '投票',
+    getInteger: () => 9,
+  },
+  reply: async (payload: any) => {
+    resurfaceReply = payload
+  },
+  fetchReply: async () => ({ id: 'new-panel' }),
+  followUp: async (payload: any) => {
+    resurfaceFollowUp = payload
+  },
+} as any)
+const resurfacedVote = UndercoverEngine.getGame(resurfaceChannelId)?.currentVote
+assert.equal(getPanelText(resurfaceReply).includes('谁是卧底投票'), true)
+assert.equal(deletedOldPanel, true)
+assert.equal(resurfacedVote?.messageId, 'new-panel')
+assert.equal(resurfacedVote?.endsAt, originalVote?.endsAt)
+assert.deepEqual(resurfacedVote?.votes, { v1: 'v2' })
+assert.equal(resurfaceFollowUp.ephemeral, true)
+assert.equal(resurfaceFollowUp.content.includes('讨论时间不变'), true)
+await UndercoverEngine.endGame(resurfaceChannelId)
+console.log('✅ 主持人可重新唤出当前投票面板，旧面板会删除且讨论时间与选票不变')
 
 const failingEndChannelId = 'undercover-failing-end-channel'
 const failingEndGame = await UndercoverEngine.startGame(failingEndChannelId, hostId, {
