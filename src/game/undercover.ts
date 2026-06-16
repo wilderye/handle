@@ -22,6 +22,40 @@ export interface UndercoverPlayer {
   joinedAt: number
 }
 
+export interface UndercoverFixedPlayer extends UndercoverPlayer {
+  number: number
+}
+
+export interface UndercoverSpeechEntry {
+  userId: string
+  content: string
+  spokenAt: number
+}
+
+export interface UndercoverSpeechRound {
+  round: number
+  order: string[]
+  entries: UndercoverSpeechEntry[]
+  completedAt: number
+}
+
+export interface UndercoverCurrentSpeech {
+  round: number
+  order: string[]
+  currentIndex: number
+  entries: UndercoverSpeechEntry[]
+  messageId?: string
+  startedAt: number
+}
+
+export interface UndercoverCurrentVote {
+  round: number
+  votes: Record<string, string>
+  messageId?: string
+  startedAt: number
+  endsAt?: number
+}
+
 export interface UndercoverGame {
   channelId: string
   hostId: string
@@ -33,6 +67,12 @@ export interface UndercoverGame {
   players: UndercoverPlayer[]
   dealtAt?: number
   deal?: UndercoverDealResult
+  fixedPlayers?: UndercoverFixedPlayer[]
+  aliveUserIds?: string[]
+  eliminatedUserIds?: string[]
+  speechRounds?: UndercoverSpeechRound[]
+  currentSpeech?: UndercoverCurrentSpeech
+  currentVote?: UndercoverCurrentVote
   createdAt: number
 }
 
@@ -53,6 +93,23 @@ export interface DisplayPlayer {
   userId: string
   displayName: string
 }
+
+export interface DisplayNumberedPlayer extends DisplayPlayer {
+  number: number
+}
+
+export type UndercoverCloseVoteResult =
+  | {
+      type: 'tie'
+      tiedUserIds: string[]
+      votes: Record<string, number>
+    }
+  | {
+      type: 'eliminated'
+      eliminatedUserId: string
+      role: 'civilian' | 'undercover'
+      votes: Record<string, number>
+    }
 
 interface UndercoverStore {
   loadGames(): Promise<UndercoverGame[]>
@@ -103,8 +160,23 @@ class PGUndercoverStore implements UndercoverStore {
         players JSONB NOT NULL DEFAULT '[]'::jsonb,
         dealt_at TIMESTAMP,
         deal JSONB,
+        fixed_players JSONB NOT NULL DEFAULT '[]'::jsonb,
+        alive_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        eliminated_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        speech_rounds JSONB NOT NULL DEFAULT '[]'::jsonb,
+        current_speech JSONB,
+        current_vote JSONB,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+    `)
+    await this.pool.query(`
+      ALTER TABLE undercover_games
+      ADD COLUMN IF NOT EXISTS fixed_players JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS alive_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS eliminated_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS speech_rounds JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS current_speech JSONB,
+      ADD COLUMN IF NOT EXISTS current_vote JSONB;
     `)
   }
 
@@ -121,22 +193,39 @@ class PGUndercoverStore implements UndercoverStore {
         players,
         dealt_at,
         deal,
+        fixed_players,
+        alive_user_ids,
+        eliminated_user_ids,
+        speech_rounds,
+        current_speech,
+        current_vote,
         created_at
       FROM undercover_games
     `)
-    return res.rows.map((row: any) => ({
-      channelId: row.channel_id,
-      hostId: row.host_id,
-      joinMessageId: row.join_message_id ?? undefined,
-      wordSource: row.word_source === 'random' ? 'random' : 'custom',
-      civilianWord: row.civilian_word,
-      undercoverWord: row.undercover_word,
-      allowLying: Boolean(row.allow_lying),
-      players: parseStoredPlayers(row.players),
-      dealtAt: row.dealt_at ? new Date(row.dealt_at).getTime() : undefined,
-      deal: parseStoredDeal(row.deal),
-      createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
-    }))
+    return res.rows.map((row: any) => {
+      const players = parseStoredPlayers(row.players)
+      const fixedPlayers = parseStoredFixedPlayers(row.fixed_players)
+      const aliveUserIds = parseStoredStringArray(row.alive_user_ids)
+      return normalizeGame({
+        channelId: row.channel_id,
+        hostId: row.host_id,
+        joinMessageId: row.join_message_id ?? undefined,
+        wordSource: row.word_source === 'random' ? 'random' : 'custom',
+        civilianWord: row.civilian_word,
+        undercoverWord: row.undercover_word,
+        allowLying: Boolean(row.allow_lying),
+        players,
+        dealtAt: row.dealt_at ? new Date(row.dealt_at).getTime() : undefined,
+        deal: parseStoredDeal(row.deal),
+        fixedPlayers,
+        aliveUserIds,
+        eliminatedUserIds: parseStoredStringArray(row.eliminated_user_ids),
+        speechRounds: parseStoredSpeechRounds(row.speech_rounds),
+        currentSpeech: parseStoredCurrentSpeech(row.current_speech),
+        currentVote: parseStoredCurrentVote(row.current_vote),
+        createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+      })
+    })
   }
 
   async saveGame(game: UndercoverGame): Promise<void> {
@@ -152,9 +241,15 @@ class PGUndercoverStore implements UndercoverStore {
         players,
         dealt_at,
         deal,
+        fixed_players,
+        alive_user_ids,
+        eliminated_user_ids,
+        speech_rounds,
+        current_speech,
+        current_vote,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17)
       ON CONFLICT (channel_id) DO UPDATE SET
         host_id = EXCLUDED.host_id,
         join_message_id = EXCLUDED.join_message_id,
@@ -165,6 +260,12 @@ class PGUndercoverStore implements UndercoverStore {
         players = EXCLUDED.players,
         dealt_at = EXCLUDED.dealt_at,
         deal = EXCLUDED.deal,
+        fixed_players = EXCLUDED.fixed_players,
+        alive_user_ids = EXCLUDED.alive_user_ids,
+        eliminated_user_ids = EXCLUDED.eliminated_user_ids,
+        speech_rounds = EXCLUDED.speech_rounds,
+        current_speech = EXCLUDED.current_speech,
+        current_vote = EXCLUDED.current_vote,
         created_at = EXCLUDED.created_at`,
       [
         game.channelId,
@@ -177,6 +278,12 @@ class PGUndercoverStore implements UndercoverStore {
         JSON.stringify(game.players),
         game.dealtAt ? new Date(game.dealtAt) : null,
         game.deal ? JSON.stringify(game.deal) : null,
+        JSON.stringify(game.fixedPlayers ?? []),
+        JSON.stringify(game.aliveUserIds ?? []),
+        JSON.stringify(game.eliminatedUserIds ?? []),
+        JSON.stringify(game.speechRounds ?? []),
+        game.currentSpeech ? JSON.stringify(game.currentSpeech) : null,
+        game.currentVote ? JSON.stringify(game.currentVote) : null,
         new Date(game.createdAt),
       ],
     )
@@ -250,6 +357,27 @@ function cloneGame(game: UndercoverGame): UndercoverGame {
   return {
     ...game,
     players: game.players.map(player => ({ ...player })),
+    fixedPlayers: game.fixedPlayers?.map(player => ({ ...player })),
+    aliveUserIds: game.aliveUserIds ? [...game.aliveUserIds] : undefined,
+    eliminatedUserIds: game.eliminatedUserIds ? [...game.eliminatedUserIds] : undefined,
+    speechRounds: game.speechRounds?.map(round => ({
+      ...round,
+      order: [...round.order],
+      entries: round.entries.map(entry => ({ ...entry })),
+    })),
+    currentSpeech: game.currentSpeech
+      ? {
+          ...game.currentSpeech,
+          order: [...game.currentSpeech.order],
+          entries: game.currentSpeech.entries.map(entry => ({ ...entry })),
+        }
+      : undefined,
+    currentVote: game.currentVote
+      ? {
+          ...game.currentVote,
+          votes: { ...game.currentVote.votes },
+        }
+      : undefined,
     deal: game.deal
       ? {
           ...game.deal,
@@ -257,6 +385,30 @@ function cloneGame(game: UndercoverGame): UndercoverGame {
         }
       : undefined,
   }
+}
+
+function normalizeGame(game: UndercoverGame): UndercoverGame {
+  const normalized = cloneGame(game)
+  normalized.fixedPlayers ??= []
+  normalized.aliveUserIds ??= []
+  normalized.eliminatedUserIds ??= []
+  normalized.speechRounds ??= []
+
+  if (normalized.dealtAt && normalized.fixedPlayers.length === 0) {
+    normalized.fixedPlayers = normalized.players.map((player, index) => ({
+      ...player,
+      number: index + 1,
+    }))
+  }
+
+  if (normalized.dealtAt && normalized.aliveUserIds.length === 0) {
+    const eliminated = new Set(normalized.eliminatedUserIds)
+    normalized.aliveUserIds = normalized.fixedPlayers
+      .map(player => player.userId)
+      .filter(userId => !eliminated.has(userId))
+  }
+
+  return normalized
 }
 
 function parseStoredJson<T>(value: unknown, fallback: T): T {
@@ -281,6 +433,84 @@ function parseStoredPlayers(value: unknown): UndercoverPlayer[] {
       userId: player.userId,
       joinedAt: Number(player.joinedAt) || Date.now(),
     }))
+}
+
+function parseStoredFixedPlayers(value: unknown): UndercoverFixedPlayer[] {
+  const raw = parseStoredJson<unknown[]>(value, [])
+  if (!Array.isArray(raw)) return []
+
+  return raw
+    .filter((player: any) => typeof player?.userId === 'string')
+    .map((player: any, index) => ({
+      userId: player.userId,
+      joinedAt: Number(player.joinedAt) || Date.now(),
+      number: Number(player.number) || index + 1,
+    }))
+}
+
+function parseStoredStringArray(value: unknown): string[] {
+  const raw = parseStoredJson<unknown[]>(value, [])
+  if (!Array.isArray(raw)) return []
+  return raw.filter((item): item is string => typeof item === 'string')
+}
+
+function parseStoredSpeechEntries(value: unknown): UndercoverSpeechEntry[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((entry: any) => typeof entry?.userId === 'string' && typeof entry.content === 'string')
+    .map((entry: any) => ({
+      userId: entry.userId,
+      content: entry.content,
+      spokenAt: Number(entry.spokenAt) || Date.now(),
+    }))
+}
+
+function parseStoredSpeechRounds(value: unknown): UndercoverSpeechRound[] {
+  const raw = parseStoredJson<unknown[]>(value, [])
+  if (!Array.isArray(raw)) return []
+
+  return raw
+    .filter((round: any) => Array.isArray(round?.order))
+    .map((round: any, index) => ({
+      round: Number(round.round) || index + 1,
+      order: parseStoredStringArray(round.order),
+      entries: parseStoredSpeechEntries(round.entries),
+      completedAt: Number(round.completedAt) || Date.now(),
+    }))
+}
+
+function parseStoredCurrentSpeech(value: unknown): UndercoverCurrentSpeech | undefined {
+  const raw = parseStoredJson<any>(value, null)
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.order)) return undefined
+
+  return {
+    round: Number(raw.round) || 1,
+    order: parseStoredStringArray(raw.order),
+    currentIndex: Number(raw.currentIndex) || 0,
+    entries: parseStoredSpeechEntries(raw.entries),
+    messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
+    startedAt: Number(raw.startedAt) || Date.now(),
+  }
+}
+
+function parseStoredCurrentVote(value: unknown): UndercoverCurrentVote | undefined {
+  const raw = parseStoredJson<any>(value, null)
+  if (!raw || typeof raw !== 'object') return undefined
+
+  const votes: Record<string, string> = {}
+  if (raw.votes && typeof raw.votes === 'object') {
+    for (const [voterId, targetId] of Object.entries(raw.votes)) {
+      if (typeof targetId === 'string') votes[voterId] = targetId
+    }
+  }
+
+  return {
+    round: Number(raw.round) || 1,
+    votes,
+    messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
+    startedAt: Number(raw.startedAt) || Date.now(),
+    endsAt: Number(raw.endsAt) || undefined,
+  }
 }
 
 function parseStoredDeal(value: unknown): UndercoverDealResult | undefined {
@@ -349,6 +579,36 @@ export function formatSpeechOrder(players: DisplayPlayer[]): string {
   return `**建议发言顺序：**\n${lines.join('\n')}`
 }
 
+export function formatUndercoverPlayerList(players: DisplayNumberedPlayer[]): string {
+  return players
+    .map(player => `**${player.number}.** ${sanitizeDisplayName(player.displayName)}`)
+    .join('\n')
+}
+
+export function formatUndercoverVoteOptions(players: DisplayNumberedPlayer[]): Array<{
+  label: string
+  value: string
+}> {
+  return players.map(player => ({
+    label: `${player.number}. ${sanitizeDisplayName(player.displayName)}`.slice(0, 100),
+    value: player.userId,
+  }))
+}
+
+export function formatUndercoverVoteStatus(input: {
+  candidates: DisplayNumberedPlayer[]
+  votes: Record<string, string>
+}): string {
+  const counts = tallyVotes(input.votes)
+  const lines = input.candidates
+    .filter(candidate => (counts[candidate.userId] ?? 0) > 0)
+    .map(candidate => `${candidate.number}. ${sanitizeDisplayName(candidate.displayName)}：${counts[candidate.userId]} 票`)
+
+  return lines.length > 0
+    ? `**当前得票：**\n${lines.join('\n')}`
+    : '**当前得票：**\n暂无投票'
+}
+
 export function shuffleSpeechOrder(
   players: DisplayPlayer[],
   rng: () => number = Math.random,
@@ -369,6 +629,14 @@ export function formatBooleanRule(value: boolean): string {
 
 export function formatWordSource(source: UndercoverWordSource): string {
   return source === 'random' ? '随机发词' : '自定义发词'
+}
+
+function tallyVotes(votes: Record<string, string>): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const targetId of Object.values(votes)) {
+    counts[targetId] = (counts[targetId] ?? 0) + 1
+  }
+  return counts
 }
 
 export function formatHostSecret(input: {
@@ -446,6 +714,54 @@ function sanitizeDisplayName(name: string): string {
   return trimmed || '未知玩家'
 }
 
+function getAliveUserIds(game: UndercoverGame): string[] {
+  if (game.aliveUserIds && game.aliveUserIds.length > 0) return [...game.aliveUserIds]
+  if (game.fixedPlayers && game.fixedPlayers.length > 0) {
+    const eliminated = new Set(game.eliminatedUserIds ?? [])
+    return game.fixedPlayers
+      .map(player => player.userId)
+      .filter(userId => !eliminated.has(userId))
+  }
+  return game.players.map(player => player.userId)
+}
+
+function shuffleUserIds(
+  userIds: string[],
+  rng: () => number = Math.random,
+): string[] {
+  const shuffled = [...userIds]
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.min(index, Math.floor(rng() * (index + 1)))
+    const current = shuffled[index]
+    shuffled[index] = shuffled[swapIndex]
+    shuffled[swapIndex] = current
+  }
+  return shuffled
+}
+
+function cloneSpeechRound(round: UndercoverSpeechRound): UndercoverSpeechRound {
+  return {
+    ...round,
+    order: [...round.order],
+    entries: round.entries.map(entry => ({ ...entry })),
+  }
+}
+
+function cloneCurrentSpeech(speech: UndercoverCurrentSpeech): UndercoverCurrentSpeech {
+  return {
+    ...speech,
+    order: [...speech.order],
+    entries: speech.entries.map(entry => ({ ...entry })),
+  }
+}
+
+function cloneCurrentVote(vote: UndercoverCurrentVote): UndercoverCurrentVote {
+  return {
+    ...vote,
+    votes: { ...vote.votes },
+  }
+}
+
 export class UndercoverEngine {
   static async startGame(
     channelId: string,
@@ -480,6 +796,10 @@ export class UndercoverEngine {
         undercoverWord: input.undercoverWord.trim(),
         allowLying: input.allowLying,
         players: [],
+        fixedPlayers: [],
+        aliveUserIds: [],
+        eliminatedUserIds: [],
+        speechRounds: [],
         createdAt: Date.now(),
       }
 
@@ -499,7 +819,8 @@ export class UndercoverEngine {
   }
 
   static getGame(channelId: string): UndercoverGame | undefined {
-    return games.get(channelId)
+    const game = games.get(channelId)
+    return game ? normalizeGame(game) : undefined
   }
 
   static async setJoinMessage(channelId: string, messageId: string): Promise<void> {
@@ -609,16 +930,295 @@ export class UndercoverEngine {
 
       const previousDealtAt = game.dealtAt
       const previousDeal = game.deal
+      const previousFixedPlayers = game.fixedPlayers?.map(player => ({ ...player }))
+      const previousAliveUserIds = game.aliveUserIds ? [...game.aliveUserIds] : undefined
+      const previousEliminatedUserIds = game.eliminatedUserIds ? [...game.eliminatedUserIds] : undefined
       game.dealtAt = Date.now()
       game.deal = result
+      game.fixedPlayers = game.players.map((player, index) => ({
+        ...player,
+        number: index + 1,
+      }))
+      game.aliveUserIds = game.fixedPlayers.map(player => player.userId)
+      game.eliminatedUserIds = []
       try {
         await store.saveGame(game)
       } catch (error) {
         game.dealtAt = previousDealtAt
         game.deal = previousDeal
+        game.fixedPlayers = previousFixedPlayers
+        game.aliveUserIds = previousAliveUserIds
+        game.eliminatedUserIds = previousEliminatedUserIds
         throw error
       }
       return result
+    })
+  }
+
+  static async startSpeechRound(
+    channelId: string,
+    rng: () => number = Math.random,
+  ): Promise<{
+    ok: boolean
+    speech?: UndercoverCurrentSpeech
+    error?: string
+  }> {
+    return withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      if (!game.dealtAt) return { ok: false, error: '本局尚未正式开始。' }
+      if (game.currentSpeech) return { ok: false, error: '当前已有进行中的发言轮。' }
+
+      const aliveUserIds = getAliveUserIds(game)
+      if (aliveUserIds.length === 0) return { ok: false, error: '当前没有存活玩家。' }
+
+      const shuffled = shuffleUserIds(aliveUserIds, rng)
+      const speech: UndercoverCurrentSpeech = {
+        round: (game.speechRounds?.length ?? 0) + 1,
+        order: shuffled,
+        currentIndex: 0,
+        entries: [],
+        startedAt: Date.now(),
+      }
+
+      const previous = game.currentSpeech
+      game.currentSpeech = speech
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentSpeech = previous
+        games.set(channelId, game)
+        throw error
+      }
+
+      return { ok: true, speech: cloneCurrentSpeech(speech) }
+    })
+  }
+
+  static async setSpeechMessage(channelId: string, messageId: string): Promise<void> {
+    await withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      if (!game.currentSpeech) return
+      const previous = game.currentSpeech.messageId
+      game.currentSpeech.messageId = messageId
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentSpeech.messageId = previous
+        games.set(channelId, game)
+        throw error
+      }
+    })
+  }
+
+  static async submitSpeech(
+    channelId: string,
+    userId: string,
+    content: string,
+  ): Promise<{
+    ok: boolean
+    completed?: boolean
+    round?: number
+    currentUserId?: string
+    error?: string
+  }> {
+    return withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      const speech = game.currentSpeech
+      if (!speech) return { ok: false, error: '当前没有进行中的发言轮。' }
+      const currentUserId = speech.order[speech.currentIndex]
+      if (currentUserId !== userId) return { ok: false, error: '还没有轮到你发言。' }
+
+      const trimmedContent = content.trim()
+      if (!trimmedContent) return { ok: false, error: '发言内容不能为空。' }
+
+      const previousSpeech = cloneCurrentSpeech(speech)
+      const previousRounds = game.speechRounds?.map(cloneSpeechRound) ?? []
+      speech.entries.push({
+        userId,
+        content: trimmedContent,
+        spokenAt: Date.now(),
+      })
+      speech.currentIndex += 1
+
+      let result: {
+        ok: boolean
+        completed: boolean
+        round: number
+        currentUserId?: string
+      }
+
+      if (speech.currentIndex >= speech.order.length) {
+        const round: UndercoverSpeechRound = {
+          round: speech.round,
+          order: [...speech.order],
+          entries: speech.entries.map(entry => ({ ...entry })),
+          completedAt: Date.now(),
+        }
+        game.speechRounds = [...previousRounds, round]
+        game.currentSpeech = undefined
+        result = { ok: true, completed: true, round: round.round }
+      } else {
+        game.currentSpeech = speech
+        result = {
+          ok: true,
+          completed: false,
+          round: speech.round,
+          currentUserId: speech.order[speech.currentIndex],
+        }
+      }
+
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentSpeech = previousSpeech
+        game.speechRounds = previousRounds
+        games.set(channelId, game)
+        throw error
+      }
+
+      return result
+    })
+  }
+
+  static async startVote(
+    channelId: string,
+    discussionMinutes?: number | null,
+  ): Promise<{
+    ok: boolean
+    vote?: UndercoverCurrentVote
+    error?: string
+  }> {
+    return withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      if (!game.dealtAt) return { ok: false, error: '本局尚未正式开始。' }
+      if (game.currentVote) return { ok: false, error: '当前已有进行中的投票。' }
+
+      const aliveUserIds = getAliveUserIds(game)
+      if (aliveUserIds.length === 0) return { ok: false, error: '当前没有存活玩家。' }
+
+      const safeMinutes = discussionMinutes && discussionMinutes > 0 ? discussionMinutes : undefined
+      const vote: UndercoverCurrentVote = {
+        round: (game.speechRounds?.length ?? 0) + 1,
+        votes: {},
+        startedAt: Date.now(),
+        endsAt: safeMinutes ? Date.now() + safeMinutes * 60_000 : undefined,
+      }
+
+      game.currentVote = vote
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentVote = undefined
+        games.set(channelId, game)
+        throw error
+      }
+
+      return { ok: true, vote: cloneCurrentVote(vote) }
+    })
+  }
+
+  static async setVoteMessage(channelId: string, messageId: string): Promise<void> {
+    await withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      if (!game.currentVote) return
+      const previous = game.currentVote.messageId
+      game.currentVote.messageId = messageId
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentVote.messageId = previous
+        games.set(channelId, game)
+        throw error
+      }
+    })
+  }
+
+  static async castVote(
+    channelId: string,
+    voterId: string,
+    targetUserId: string,
+  ): Promise<{
+    ok: boolean
+    error?: string
+  }> {
+    return withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      if (!game.currentVote) return { ok: false, error: '当前没有进行中的投票。' }
+      const aliveUserIds = getAliveUserIds(game)
+      if (!aliveUserIds.includes(voterId)) return { ok: false, error: '只有当前存活玩家可以投票。' }
+      if (!aliveUserIds.includes(targetUserId)) return { ok: false, error: '只能投给当前存活玩家。' }
+
+      const previousVote = cloneCurrentVote(game.currentVote)
+      game.currentVote.votes[voterId] = targetUserId
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentVote = previousVote
+        games.set(channelId, game)
+        throw error
+      }
+
+      return { ok: true }
+    })
+  }
+
+  static async closeVote(channelId: string): Promise<{
+    ok: boolean
+    result?: UndercoverCloseVoteResult
+    error?: string
+  }> {
+    return withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      const vote = game.currentVote
+      if (!vote) return { ok: false, error: '当前没有进行中的投票。' }
+
+      const previousVote = cloneCurrentVote(vote)
+      const previousAliveUserIds = [...getAliveUserIds(game)]
+      const previousEliminatedUserIds = [...(game.eliminatedUserIds ?? [])]
+      const counts = tallyVotes(vote.votes)
+      const maxVotes = Math.max(0, ...Object.values(counts))
+      const topUserIds = getAliveUserIds(game)
+        .filter(userId => (counts[userId] ?? 0) === maxVotes)
+
+      let result: UndercoverCloseVoteResult
+      if (maxVotes === 0 || topUserIds.length !== 1) {
+        result = {
+          type: 'tie',
+          tiedUserIds: topUserIds,
+          votes: counts,
+        }
+      } else {
+        const eliminatedUserId = topUserIds[0]
+        const role = game.deal?.undercoverUserId === eliminatedUserId ? 'undercover' : 'civilian'
+        game.aliveUserIds = previousAliveUserIds.filter(userId => userId !== eliminatedUserId)
+        game.eliminatedUserIds = [...previousEliminatedUserIds, eliminatedUserId]
+        result = {
+          type: 'eliminated',
+          eliminatedUserId,
+          role,
+          votes: counts,
+        }
+      }
+
+      game.currentVote = undefined
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentVote = previousVote
+        game.aliveUserIds = previousAliveUserIds
+        game.eliminatedUserIds = previousEliminatedUserIds
+        games.set(channelId, game)
+        throw error
+      }
+
+      return { ok: true, result }
     })
   }
 

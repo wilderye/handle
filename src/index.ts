@@ -14,6 +14,7 @@ import { initUndercoverDB } from "./game/undercover.js";
 import { handleReactionAdd, handleReactionRemove } from "./game/soup-reactions.js";
 import { handleSoupButton } from "./commands/soup.js";
 import { handleUndercoverReactionAdd, handleUndercoverReactionRemove } from "./game/undercover-reactions.js";
+import { handleUndercoverButton, handleUndercoverModal, handleUndercoverSelect } from "./commands/undercover.js";
 
 // 加载环境变量
 config();
@@ -104,6 +105,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleSoupButton(interaction);
     } catch (error) {
       console.error('❌ 处理海龟汤翻页按钮时出错:', error);
+    }
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith('undercover_')) {
+    try {
+      await handleUndercoverButton(interaction);
+    } catch (error) {
+      console.error('❌ 处理谁是卧底按钮时出错:', error);
+    }
+    return;
+  }
+
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('undercover_')) {
+    try {
+      await handleUndercoverSelect(interaction);
+    } catch (error) {
+      console.error('❌ 处理谁是卧底下拉菜单时出错:', error);
+    }
+    return;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('undercover_')) {
+    try {
+      await handleUndercoverModal(interaction);
+    } catch (error) {
+      console.error('❌ 处理谁是卧底输入框时出错:', error);
     }
     return;
   }
