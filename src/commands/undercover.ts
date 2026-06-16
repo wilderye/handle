@@ -563,6 +563,7 @@ function speechButtonRow() {
     type: 1,
     components: [
       { type: 2, style: 1, label: '发言', custom_id: UNDERCOVER_SPEECH_BUTTON_ID },
+      { type: 2, style: 2, label: '查看历史', custom_id: UNDERCOVER_HISTORY_BUTTON_ID },
     ],
   }
 }
@@ -835,7 +836,15 @@ async function buildHistoryPanel(
   page: number,
   ownerId: string,
 ) {
-  const rounds = game.speechRounds ?? []
+  const rounds = [...(game.speechRounds ?? [])]
+  if (game.currentSpeech && game.currentSpeech.entries.length > 0) {
+    rounds.push({
+      round: game.currentSpeech.round,
+      order: [...game.currentSpeech.order],
+      entries: game.currentSpeech.entries.map(entry => ({ ...entry })),
+      completedAt: Date.now(),
+    })
+  }
   const total = Math.max(1, rounds.length)
   const safePage = Math.max(1, Math.min(page, total))
   const round = rounds[safePage - 1]

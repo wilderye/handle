@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
-import { data as undercoverCommandData, execute as executeUndercoverCommand } from './commands/undercover.js'
+import {
+  data as undercoverCommandData,
+  execute as executeUndercoverCommand,
+  handleUndercoverButton,
+} from './commands/undercover.js'
 import {
   UndercoverEngine,
   formatAudiencePeek,
@@ -204,6 +208,64 @@ const nextSpeech = await UndercoverEngine.startSpeechRound(channelId, () => 0)
 assert.equal(nextSpeech.ok, true)
 assert.deepEqual(nextSpeech.speech?.order, ['u3', 'u1'])
 console.log('✅ 下一轮发言只包含存活玩家但继续沿用固定序号')
+
+const speechPanelChannelId = 'undercover-speech-panel-channel'
+await UndercoverEngine.startGame(speechPanelChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '白天',
+  undercoverWord: '黑夜',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(speechPanelChannelId, 's1')
+await UndercoverEngine.addPlayer(speechPanelChannelId, 's2')
+await UndercoverEngine.addPlayer(speechPanelChannelId, 's3')
+await UndercoverEngine.dealWords(speechPanelChannelId, () => 0)
+let speechPanelReply: any
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  channelId: speechPanelChannelId,
+  user: { id: hostId },
+  options: { getSubcommand: () => '开始发言' },
+  reply: async (payload: any) => {
+    speechPanelReply = payload
+  },
+  fetchReply: async () => ({ id: 'speech-panel-message' }),
+} as any)
+const speechPanelButtons = speechPanelReply.components?.[1]?.components?.map((component: any) => component.label)
+assert.deepEqual(speechPanelButtons, ['发言', '查看历史'])
+await UndercoverEngine.submitSpeech(speechPanelChannelId, 's2', '本轮第一段发言')
+let speechHistoryReply: any
+await handleUndercoverButton({
+  customId: 'undercover_history_open',
+  channelId: speechPanelChannelId,
+  user: { id: 's3' },
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  reply: async (payload: any) => {
+    speechHistoryReply = payload
+  },
+} as any)
+assert.equal(speechHistoryReply.ephemeral, true)
+assert.equal(getPanelText(speechHistoryReply).includes('本轮第一段发言'), true)
+await UndercoverEngine.endGame(speechPanelChannelId)
+console.log('✅ 发言面板提供查看历史，且历史包含当前轮已提交的发言')
 
 const speechOrder = formatSpeechOrder([
   { userId: 'u1', displayName: '用户A' },
