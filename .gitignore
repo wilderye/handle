@@ -28,3 +28,5 @@ npm-debug.log*
 # 操作系统
 .DS_Store
 Thumbs.db
+
+服务器相关.txt

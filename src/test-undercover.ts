@@ -3,6 +3,7 @@ import {
   data as undercoverCommandData,
   execute as executeUndercoverCommand,
   handleUndercoverButton,
+  handleUndercoverModal,
 } from './commands/undercover.js'
 import {
   UndercoverEngine,
@@ -84,7 +85,7 @@ await assert.rejects(
 assert.equal((await UndercoverEngine.addPlayer(channelId, 'u3')).added, true)
 console.log('✅ 报名状态支持去重，并阻止少于 3 人正式开始')
 
-const dealResult = await UndercoverEngine.dealWords(channelId, () => 0)
+const dealResult = await UndercoverEngine.dealWords(channelId, sequenceRng([0, 0]))
 
 assert.equal(dealResult.undercoverUserId, 'u1')
 assert.deepEqual(
@@ -110,14 +111,14 @@ const dealtGame = UndercoverEngine.getGame(channelId)
 assert.deepEqual(
   dealtGame?.fixedPlayers?.map(player => ({ userId: player.userId, number: player.number })),
   [
-    { userId: 'u1', number: 1 },
-    { userId: 'u2', number: 2 },
-    { userId: 'u3', number: 3 },
+    { userId: 'u2', number: 1 },
+    { userId: 'u3', number: 2 },
+    { userId: 'u1', number: 3 },
   ],
 )
-assert.deepEqual(dealtGame?.aliveUserIds, ['u1', 'u2', 'u3'])
+assert.deepEqual(dealtGame?.aliveUserIds, ['u2', 'u3', 'u1'])
 assert.deepEqual(dealtGame?.eliminatedUserIds, [])
-console.log('✅ 正式开始会按报名顺序固定玩家序号并初始化存活名单')
+console.log('✅ 正式开始会按随机发言顺序固定玩家序号并初始化存活名单')
 
 const numberedPlayers = [
   { userId: 'u1', number: 1, displayName: '用户A' },
@@ -179,8 +180,8 @@ assert.deepEqual(await UndercoverEngine.castVote(channelId, 'u2', 'u1'), { ok: t
 let voteClose = await UndercoverEngine.closeVote(channelId)
 assert.equal(voteClose.ok, true)
 assert.equal(voteClose.result?.type, 'tie')
-assert.deepEqual(voteClose.result?.tiedUserIds, ['u1', 'u2'])
-assert.deepEqual(UndercoverEngine.getGame(channelId)?.aliveUserIds, ['u1', 'u2', 'u3'])
+assert.deepEqual(voteClose.result?.tiedUserIds, ['u2', 'u1'])
+assert.deepEqual(UndercoverEngine.getGame(channelId)?.aliveUserIds, ['u2', 'u3', 'u1'])
 
 voteStart = await UndercoverEngine.startVote(channelId)
 assert.equal(voteStart.ok, true)
@@ -191,7 +192,7 @@ assert.deepEqual(await UndercoverEngine.castVote(channelId, 'u3', 'u2'), { ok: t
 voteClose = await UndercoverEngine.closeVote(channelId)
 assert.equal(voteClose.result?.type, 'eliminated')
 assert.equal(voteClose.result?.eliminatedUserId, 'u2')
-assert.deepEqual(UndercoverEngine.getGame(channelId)?.aliveUserIds, ['u1', 'u3'])
+assert.deepEqual(UndercoverEngine.getGame(channelId)?.aliveUserIds, ['u3', 'u1'])
 assert.deepEqual(UndercoverEngine.getGame(channelId)?.fixedPlayers?.map(player => player.number), [1, 2, 3])
 console.log('✅ 投票支持改票、平票不淘汰、唯一最高票淘汰且不重排序号')
 
@@ -219,8 +220,10 @@ await UndercoverEngine.startGame(speechPanelChannelId, hostId, {
 await UndercoverEngine.addPlayer(speechPanelChannelId, 's1')
 await UndercoverEngine.addPlayer(speechPanelChannelId, 's2')
 await UndercoverEngine.addPlayer(speechPanelChannelId, 's3')
-await UndercoverEngine.dealWords(speechPanelChannelId, () => 0)
+await UndercoverEngine.dealWords(speechPanelChannelId, sequenceRng([0, 0, 0]))
 let speechPanelReply: any
+const originalRandom = Math.random
+Math.random = sequenceRng([0, 0])
 await executeUndercoverCommand({
   guild: {
     members: {
@@ -240,9 +243,53 @@ await executeUndercoverCommand({
   },
   fetchReply: async () => ({ id: 'speech-panel-message' }),
 } as any)
+Math.random = originalRandom
 const speechPanelButtons = speechPanelReply.components?.[1]?.components?.map((component: any) => component.label)
 assert.deepEqual(speechPanelButtons, ['发言', '查看历史'])
-await UndercoverEngine.submitSpeech(speechPanelChannelId, 's2', '本轮第一段发言')
+assert.equal(getPanelText(speechPanelReply).includes('本轮发言'), false)
+let deletedSpeechPanel = false
+let nextSpeechPanel: any
+await handleUndercoverModal({
+  customId: 'undercover_speech_modal_undercover-speech-panel-channel_s2',
+  channelId: speechPanelChannelId,
+  user: { id: 's2' },
+  fields: {
+    getTextInputValue: () => '本轮第一段发言',
+  },
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  channel: {
+    messages: {
+      fetch: async (messageId: string) => {
+        assert.equal(messageId, 'speech-panel-message')
+        return {
+          delete: async () => {
+            deletedSpeechPanel = true
+          },
+        }
+      },
+    },
+    send: async (payload: any) => {
+      nextSpeechPanel = payload
+      return { id: 'speech-panel-message-2' }
+    },
+  },
+  deferReply: async (payload: any) => {
+    assert.equal(payload.ephemeral, true)
+  },
+  editReply: async () => undefined,
+} as any)
+assert.equal(deletedSpeechPanel, true)
+assert.equal(getPanelText(nextSpeechPanel).includes('本轮第一段发言'), true)
+assert.equal(getPanelText(nextSpeechPanel).includes('---'), true)
 let speechHistoryReply: any
 await handleUndercoverButton({
   customId: 'undercover_history_open',
@@ -263,9 +310,10 @@ await handleUndercoverButton({
   },
 } as any)
 assert.equal(speechHistoryReply.ephemeral, true)
-assert.equal(getPanelText(speechHistoryReply).includes('本轮第一段发言'), true)
+assert.equal(getPanelText(speechHistoryReply).includes('暂无发言记录'), true)
+assert.equal(speechHistoryReply.components.length, 1)
 await UndercoverEngine.endGame(speechPanelChannelId)
-console.log('✅ 发言面板提供查看历史，且历史包含当前轮已提交的发言')
+console.log('✅ 发言面板直接展示本轮发言，历史只展示已完成轮次')
 
 const speechOrder = formatSpeechOrder([
   { userId: 'u1', displayName: '用户A' },
@@ -294,7 +342,7 @@ assert.deepEqual(
   originalSpeechPlayers.map(player => player.userId),
   ['u1', 'u2', 'u3'],
 )
-console.log('✅ 正式开始会随机打乱公开发言顺序，并保留原报名顺序')
+console.log('✅ 发言顺序工具会随机打乱且不修改原数组')
 
 const lobbyMessage = formatLobbyMessage({
   hostName: '主持人A',
@@ -306,6 +354,59 @@ assert.equal(
   '## 🎭 谁是卧底报名开始\n\n**主持人：**主持人A\n**词汇来源：**自定义发词\n**可否撒谎：**是\n请点击 ✅ 报名。\n主持人使用 `/卧底 正式开始` 停止报名并发词。',
 )
 console.log('✅ 报名面板展示词汇来源、撒谎规则和正式开始命令')
+
+const officialPanelChannelId = 'undercover-official-panel-channel'
+await UndercoverEngine.startGame(officialPanelChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '苹果',
+  undercoverWord: '梨',
+  allowLying: true,
+})
+await UndercoverEngine.addPlayer(officialPanelChannelId, 'p1')
+await UndercoverEngine.addPlayer(officialPanelChannelId, 'p2')
+await UndercoverEngine.addPlayer(officialPanelChannelId, 'p3')
+let officialPublicPanel: any
+let officialSecretReply: any
+Math.random = sequenceRng([0, 0, 0])
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({
+        displayName: `玩家${userId}`,
+        username: userId,
+        send: async () => undefined,
+      }),
+    },
+  },
+  channelId: officialPanelChannelId,
+  channel: {
+    send: async (payload: any) => {
+      officialPublicPanel = payload
+    },
+  },
+  user: { id: hostId },
+  options: { getSubcommand: () => '正式开始' },
+  deferReply: async (payload: any) => {
+    assert.equal(payload.ephemeral, true)
+  },
+  editReply: async (payload: any) => {
+    officialSecretReply = payload
+  },
+} as any)
+Math.random = originalRandom
+const officialPublicText = getPanelText(officialPublicPanel)
+assert.equal(officialPublicText.includes('**发言顺序：**'), true)
+assert.equal(officialPublicText.includes('玩家固定序号'), false)
+assert.equal(officialPublicText.includes('建议发言顺序'), false)
+assert.equal(officialPublicText.includes('**1.** 玩家p2\n**2.** 玩家p3\n**3.** 玩家p1'), true)
+assert.equal(getPanelText(officialSecretReply).includes('**卧底：**玩家p1'), true)
+await UndercoverEngine.endGame(officialPanelChannelId)
+console.log('✅ 正式开始公开面板只展示随机固定发言顺序这一套编号')
 
 const hostSecret = formatHostSecret({
   civilianWord: '苹果',
@@ -465,7 +566,8 @@ assert.equal(reloadedGame?.joinMessageId, 'join-message-1')
 assert.deepEqual(reloadedGame?.players.map(player => player.userId), ['r1', 'r2', 'r3'])
 assert.equal(reloadedGame?.deal?.undercoverUserId, 'r1')
 assert.deepEqual(reloadedGame?.fixedPlayers?.map(player => player.number), [1, 2, 3])
-assert.deepEqual(reloadedGame?.aliveUserIds, ['r1', 'r2', 'r3'])
+assert.deepEqual(reloadedGame?.fixedPlayers?.map(player => player.userId), ['r2', 'r3', 'r1'])
+assert.deepEqual(reloadedGame?.aliveUserIds, ['r2', 'r3', 'r1'])
 assert.deepEqual(reloadedGame?.currentSpeech?.entries.map(entry => entry.content), ['重载前发言'])
 assert.deepEqual(reloadedGame?.currentVote?.votes, { r1: 'r2' })
 assert.equal(reloadedGame?.currentVote?.messageId, 'new-vote-message')
@@ -540,6 +642,127 @@ assert.equal(resurfaceFollowUp.ephemeral, true)
 assert.equal(resurfaceFollowUp.content.includes('讨论时间不变'), true)
 await UndercoverEngine.endGame(resurfaceChannelId)
 console.log('✅ 主持人可重新唤出当前投票面板，旧面板会删除且讨论时间与选票不变')
+
+const timerChannelId = 'undercover-vote-timer-channel'
+await UndercoverEngine.startGame(timerChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '太阳',
+  undercoverWord: '月亮',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(timerChannelId, 't1')
+await UndercoverEngine.addPlayer(timerChannelId, 't2')
+await UndercoverEngine.addPlayer(timerChannelId, 't3')
+await UndercoverEngine.dealWords(timerChannelId, () => 0)
+const capturedTimers: Array<{ callback: () => void; delay: number }> = []
+const originalSetTimeout = globalThis.setTimeout
+const originalClearTimeout = globalThis.clearTimeout
+globalThis.setTimeout = ((callback: () => void, delay?: number) => {
+  const timer = { callback, delay: delay ?? 0 }
+  capturedTimers.push(timer)
+  return timer as any
+}) as any
+globalThis.clearTimeout = (() => undefined) as any
+let timerPanelReply: any
+const timerMessages: string[] = []
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  channelId: timerChannelId,
+  channel: {
+    send: async (payload: any) => {
+      timerMessages.push(typeof payload === 'string' ? payload : getPanelText(payload))
+      return { id: `timer-message-${timerMessages.length}` }
+    },
+  },
+  user: { id: hostId },
+  options: {
+    getSubcommand: () => '投票',
+    getInteger: () => 1,
+  },
+  reply: async (payload: any) => {
+    timerPanelReply = payload
+  },
+  fetchReply: async () => ({ id: 'timer-vote-panel' }),
+} as any)
+globalThis.setTimeout = originalSetTimeout
+globalThis.clearTimeout = originalClearTimeout
+assert.equal(getPanelText(timerPanelReply).includes('讨论截止'), true)
+const dueTimer = capturedTimers.find(timer => timer.delay >= 59_000)
+assert.ok(dueTimer)
+dueTimer.callback()
+await new Promise(resolve => originalSetTimeout(resolve, 0))
+assert.equal(UndercoverEngine.getGame(timerChannelId)?.currentVote !== undefined, true)
+assert.deepEqual(UndercoverEngine.getGame(timerChannelId)?.aliveUserIds, ['t2', 't3', 't1'])
+assert.equal(timerMessages.some(message => message.includes('讨论时间已到')), true)
+await UndercoverEngine.endGame(timerChannelId)
+console.log('✅ 投票讨论时间到点只提醒，不自动结算投票')
+
+const undercoverEliminatedChannelId = 'undercover-eliminated-channel'
+await UndercoverEngine.startGame(undercoverEliminatedChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '红茶',
+  undercoverWord: '绿茶',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(undercoverEliminatedChannelId, 'e1')
+await UndercoverEngine.addPlayer(undercoverEliminatedChannelId, 'e2')
+await UndercoverEngine.addPlayer(undercoverEliminatedChannelId, 'e3')
+await UndercoverEngine.dealWords(undercoverEliminatedChannelId, () => 0)
+await UndercoverEngine.startVote(undercoverEliminatedChannelId)
+await UndercoverEngine.castVote(undercoverEliminatedChannelId, 'e1', 'e1')
+await UndercoverEngine.castVote(undercoverEliminatedChannelId, 'e2', 'e1')
+await UndercoverEngine.castVote(undercoverEliminatedChannelId, 'e3', 'e1')
+await UndercoverEngine.setVoteMessage(undercoverEliminatedChannelId, 'undercover-vote-panel')
+let closedVotePanelEdited = false
+let undercoverResultPanel: any
+await handleUndercoverButton({
+  customId: 'undercover_vote_close',
+  channelId: undercoverEliminatedChannelId,
+  user: { id: hostId },
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  channel: {
+    messages: {
+      fetch: async (messageId: string) => {
+        assert.equal(messageId, 'undercover-vote-panel')
+        return {
+          edit: async () => {
+            closedVotePanelEdited = true
+          },
+        }
+      },
+    },
+    send: async (payload: any) => {
+      undercoverResultPanel = payload
+    },
+  },
+  deferUpdate: async () => undefined,
+} as any)
+assert.equal(closedVotePanelEdited, true)
+assert.equal(UndercoverEngine.hasActiveGame(undercoverEliminatedChannelId), true)
+assert.equal(UndercoverEngine.getGame(undercoverEliminatedChannelId)?.currentVote, undefined)
+assert.deepEqual(UndercoverEngine.getGame(undercoverEliminatedChannelId)?.aliveUserIds, ['e2', 'e3'])
+assert.equal(getPanelText(undercoverResultPanel).includes('卧底被淘汰，平民胜利'), true)
+assert.equal(getPanelText(undercoverResultPanel).includes('游戏结束'), false)
+await UndercoverEngine.endGame(undercoverEliminatedChannelId)
+console.log('✅ 投出卧底只宣布胜利，不自动结束整局或清理游戏状态')
 
 const failingEndChannelId = 'undercover-failing-end-channel'
 const failingEndGame = await UndercoverEngine.startGame(failingEndChannelId, hostId, {

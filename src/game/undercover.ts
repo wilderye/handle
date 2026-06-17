@@ -949,8 +949,12 @@ export class UndercoverEngine {
       const previousEliminatedUserIds = game.eliminatedUserIds ? [...game.eliminatedUserIds] : undefined
       game.dealtAt = Date.now()
       game.deal = result
-      game.fixedPlayers = game.players.map((player, index) => ({
-        ...player,
+      const fixedOrder = shuffleUserIds(game.players.map(player => player.userId), rng)
+      const playerById = new Map(game.players.map(player => [player.userId, player]))
+      game.fixedPlayers = fixedOrder.map((userId, index) => ({
+        ...playerById.get(userId)!,
+        userId,
+        joinedAt: playerById.get(userId)?.joinedAt ?? Date.now(),
         number: index + 1,
       }))
       game.aliveUserIds = game.fixedPlayers.map(player => player.userId)
@@ -977,6 +981,7 @@ export class UndercoverEngine {
     speech?: UndercoverCurrentSpeech
     error?: string
   }> {
+    void rng
     return withChannelWrite(channelId, async () => {
       const game = normalizeGame(this.requireGame(channelId))
       if (!game.dealtAt) return { ok: false, error: '本局尚未正式开始。' }
@@ -985,10 +990,9 @@ export class UndercoverEngine {
       const aliveUserIds = getAliveUserIds(game)
       if (aliveUserIds.length === 0) return { ok: false, error: '当前没有存活玩家。' }
 
-      const shuffled = shuffleUserIds(aliveUserIds, rng)
       const speech: UndercoverCurrentSpeech = {
         round: (game.speechRounds?.length ?? 0) + 1,
-        order: shuffled,
+        order: aliveUserIds,
         currentIndex: 0,
         entries: [],
         startedAt: Date.now(),

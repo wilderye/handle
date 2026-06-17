@@ -20,10 +20,8 @@ import {
   formatUndercoverVoteOptions,
   formatUndercoverVoteStatus,
   formatPreparedEnd,
-  formatSpeechOrder,
   getVoteReminderOffsets,
   getRandomUndercoverWordPair,
-  shuffleSpeechOrder,
   shouldSendVoteEndingSoon,
   UndercoverEngine,
   UNDERCOVER_JOIN_EMOJI,
@@ -113,7 +111,7 @@ export const data = new SlashCommandBuilder()
     .setDescription('主持人开启一轮投票')
     .addIntegerOption(option => option
       .setName(DISCUSSION_MINUTES_OPTION)
-      .setDescription('可选讨论时间，单位分钟；时间到后自动结算')
+      .setDescription('可选讨论时间，单位分钟；时间到后提醒主持人结算')
       .setRequired(false)
       .setMinValue(1)
       .setMaxValue(240)
@@ -536,7 +534,11 @@ async function handleHelp(interaction: ChatInputCommandInteraction) {
         `\`/卧底 报名阶段\`\n` +
         `用户成为主持人，决定词汇并进入报名阶段。\n\n` +
         `\`/卧底 正式开始\`\n` +
-        `停止报名，Bot 将词汇私信给参与者，并公布建议发言顺序。仅本局主持人可用。\n\n` +
+        `停止报名，Bot 将词汇私信给参与者，并公布固定发言顺序。仅本局主持人可用。\n\n` +
+        `\`/卧底 开始发言\`\n` +
+        `开启一轮面板化发言，当前轮已发言内容会显示在面板上。仅本局主持人可用。\n\n` +
+        `\`/卧底 投票\`\n` +
+        `开启或重新唤出投票面板；讨论时间到后只提醒主持人手动结算。仅本局主持人可用。\n\n` +
         `\`/卧底 游戏通知\`\n` +
         `通知\`小心她人！\`身份组成员前来玩游戏！仅本局主持人可用。\n\n` +
         `\`/卧底 观众偷看\`\n` +
@@ -648,11 +650,43 @@ async function buildSpeechPanel(
     .map(userId => byUserId.get(userId))
     .filter((player): player is NonNullable<typeof player> => Boolean(player))
   const currentUserId = speech.order[speech.currentIndex]
+  const spokenSection = formatSpeechEntriesForPanel(speech.entries, byUserId)
+  const currentSpeechContent = spokenSection
+    ? `\n\n---\n\n**本轮发言：**\n${spokenSection}`
+    : ''
   return panelWithRows(
     `## 🎙️ 第 ${speech.round} 轮发言\n\n` +
     `当前发言：<@${currentUserId}>\n\n` +
-    `**发言顺序：**\n${formatUndercoverPlayerList(orderedPlayers)}`,
+    `**发言顺序：**\n${formatUndercoverPlayerList(orderedPlayers)}` +
+    currentSpeechContent,
     [speechButtonRow()],
+  )
+}
+
+function formatSpeechEntriesForPanel(
+  entries: UndercoverCurrentSpeech['entries'],
+  playersByUserId: Map<string, { number: number; displayName: string }>,
+): string {
+  return entries.map(entry => {
+    const player = playersByUserId.get(entry.userId)
+    const label = player
+      ? `${player.number}. ${player.displayName}`
+      : `<@${entry.userId}>`
+    return `**${label}：**${entry.content}`
+  }).join('\n')
+}
+
+async function buildCompletedSpeechPanel(
+  interaction: UndercoverInteraction,
+  game: UndercoverGame,
+  round: NonNullable<UndercoverGame['speechRounds']>[number],
+) {
+  const players = await getDisplayNumberedPlayers(interaction, game, round.order)
+  const byUserId = new Map(players.map(player => [player.userId, player]))
+  const entries = formatSpeechEntriesForPanel(round.entries, byUserId)
+  return panel(
+    `## ✅ 第 ${round.round} 轮发言完毕\n\n` +
+    `**本轮发言：**\n${entries}`,
   )
 }
 
@@ -747,8 +781,8 @@ function scheduleVoteTimers(
   const now = Date.now()
   const remainingMs = endsAt - now
   if (remainingMs <= 0) {
-    void closeVoteByTimer(context, channelId, endsAt).catch(error => {
-      console.error('[Undercover] 自动结束投票失败:', error)
+    void sendVoteTimeUp(context, channelId, endsAt).catch(error => {
+      console.error('[Undercover] 发送投票到点提醒失败:', error)
     })
     return
   }
@@ -779,8 +813,8 @@ function scheduleVoteTimers(
   }
 
   rememberVoteTimer(channelId, setTimeout(() => {
-    void closeVoteByTimer(context, channelId, endsAt).catch(error => {
-      console.error('[Undercover] 自动结束投票失败:', error)
+    void sendVoteTimeUp(context, channelId, endsAt).catch(error => {
+      console.error('[Undercover] 发送投票到点提醒失败:', error)
     })
   }, remainingMs))
 }
@@ -797,7 +831,7 @@ async function sendVoteEndingSoon(
   await channel.send('投票即将在 30 秒后结束。').catch(() => undefined)
 }
 
-async function closeVoteByTimer(
+async function sendVoteTimeUp(
   context: UndercoverRuntimeContext,
   channelId: string,
   expectedEndsAt: number,
@@ -806,10 +840,10 @@ async function closeVoteByTimer(
   if (!game?.currentVote || game.currentVote.endsAt !== expectedEndsAt) return
 
   clearVoteTimers(channelId)
-  const voteMessageId = game.currentVote.messageId
-  const result = await UndercoverEngine.closeVote(channelId)
-  await editVoteMessageClosed(context, voteMessageId)
-  await announceVoteResult(context, game, result.result)
+  await replaceCurrentVotePanel(context, channelId, expectedEndsAt)
+  const channel = context.channel
+  if (!channel || !('send' in channel)) return
+  await channel.send('讨论时间已到，请主持人点击“结束投票”结算本轮投票。').catch(() => undefined)
 }
 
 export async function resumeUndercoverVoteTimers(client: Client) {
@@ -837,14 +871,6 @@ async function buildHistoryPanel(
   ownerId: string,
 ) {
   const rounds = [...(game.speechRounds ?? [])]
-  if (game.currentSpeech && game.currentSpeech.entries.length > 0) {
-    rounds.push({
-      round: game.currentSpeech.round,
-      order: [...game.currentSpeech.order],
-      entries: game.currentSpeech.entries.map(entry => ({ ...entry })),
-      completedAt: Date.now(),
-    })
-  }
   const total = Math.max(1, rounds.length)
   const safePage = Math.max(1, Math.min(page, total))
   const round = rounds[safePage - 1]
@@ -911,8 +937,7 @@ async function dealAndNotify(interaction: UndercoverInteraction) {
   const publicContent =
     `## 🎭 正式开始，请查看私信。\n` +
     `**可否撒谎：**${formatBooleanRule(game.allowLying)}${failedSection}\n\n` +
-    `**玩家固定序号：**\n${formatUndercoverPlayerList(displayPlayers)}\n\n` +
-    formatSpeechOrder(shuffleSpeechOrder(displayPlayers))
+    `**发言顺序：**\n${formatUndercoverPlayerList(displayPlayers)}`
 
   await channel.send(panel(publicContent))
 
@@ -1032,8 +1057,10 @@ export async function handleUndercoverModal(interaction: ModalSubmitInteraction)
 
   if (result.completed) {
     const channel = interaction.channel
-    if (channel && 'send' in channel) {
-      await channel.send(panel(`## ✅ 第 ${result.round} 轮发言完毕\n\n全部发言完毕。`))
+    const game = UndercoverEngine.getGame(channelId)
+    const round = game?.speechRounds?.find(item => item.round === result.round)
+    if (channel && 'send' in channel && game && round) {
+      await channel.send(await buildCompletedSpeechPanel(interaction, game, round))
     }
     await interaction.editReply('✅ 发言已记录，本轮发言已结束。')
     return
@@ -1208,31 +1235,24 @@ async function announceVoteResult(
     const tiedPlayers = await getDisplayNumberedPlayers(interaction, gameBeforeClose, result.tiedUserIds)
     await channel.send(panel(
       `## 🟰 投票平局\n\n` +
-      `当前是 ${tiedPlayers.map(player => `<@${player.userId}>`).join(' 和 ')} 平局。`,
+      `当前是 ${tiedPlayers.map(player => `${player.number}. ${player.displayName}`).join(' 和 ')} 平局。`,
     ))
     return
   }
 
   const eliminated = (await getDisplayNumberedPlayers(interaction, gameBeforeClose, [result.eliminatedUserId]))[0]
-  const label = eliminated ? `<@${eliminated.userId}>` : `<@${result.eliminatedUserId}>`
+  const label = eliminated ? `${eliminated.number}. ${eliminated.displayName}` : `<@${result.eliminatedUserId}>`
   if (result.role === 'undercover') {
     await channel.send(panel(
       `## 🏁 投票结果\n\n` +
-      `${label} 遗憾出局。\n\n卧底出局，平民获得胜利，游戏结束。`,
+      `${label} 遗憾出局。\n\n卧底被淘汰，平民胜利。`,
     ))
-    const channelId = interaction.channelId
-    if (channelId) {
-      await UndercoverEngine.endGame(channelId)
-    }
-    if (interaction.guild) {
-      await removeHostRoleFromMember(interaction.guild, gameBeforeClose.hostId, '谁是卧底投票结束')
-    }
     return
   }
 
   await channel.send(panel(
     `## 🗳️ 投票结果\n\n` +
-    `${label} 遗憾出局。\n\n游戏继续。`,
+    `${label} 遗憾出局。`,
   ))
 }
 
