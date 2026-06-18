@@ -453,11 +453,6 @@ async function handleAudiencePeek(interaction: ChatInputCommandInteraction) {
     return
   }
 
-  if (game.hostId === interaction.user.id) {
-    await interaction.reply({ content: '❌ 主持人已经知道答案，不能使用观众偷看。', ephemeral: true })
-    return
-  }
-
   if (game.players.some(player => player.userId === interaction.user.id)) {
     await interaction.reply({ content: '❌ 参与者不能使用观众偷看。', ephemeral: true })
     return
@@ -944,13 +939,79 @@ async function dealAndNotify(interaction: UndercoverInteraction) {
   const undercoverName = displayPlayers.find(player => player.userId === result.undercoverUserId)?.displayName
     ?? '未知玩家'
 
-  await interaction.editReply(panel(formatHostSecret({
+  await sendHostSecretWithFallback(interaction, game, formatHostSecret({
     civilianWord: result.civilianWord,
     undercoverWord: result.undercoverWord,
     undercoverName,
     allowLying: game.allowLying,
     failedDmNames,
-  })))
+  }))
+}
+
+async function sendHostSecretWithFallback(
+  interaction: UndercoverInteraction,
+  game: UndercoverGame,
+  hostSecretContent: string,
+) {
+  const secretPayload = panel(hostSecretContent)
+
+  try {
+    await interaction.editReply(secretPayload)
+    return
+  } catch (error) {
+    console.error('[Undercover] 编辑主持人答案私密回复失败:', error)
+  }
+
+  if ('followUp' in interaction && typeof interaction.followUp === 'function') {
+    try {
+      await interaction.followUp({ ...secretPayload, ephemeral: true })
+      return
+    } catch (error) {
+      console.error('[Undercover] 补发主持人答案私密回复失败:', error)
+    }
+
+    try {
+      await interaction.followUp({
+        content: '❌ 主持人答案发送失败，请使用 `/卧底 观众偷看` 查看本局答案。',
+        ephemeral: true,
+      })
+      return
+    } catch (error) {
+      console.error('[Undercover] 补发主持人答案失败提示失败:', error)
+    }
+  }
+
+  const sentDm = await sendHostSecretDm(interaction, game.hostId, hostSecretContent)
+  if (sentDm) return
+
+  await sendPublicHostSecretRecoveryHint(interaction)
+}
+
+async function sendHostSecretDm(
+  interaction: UndercoverInteraction,
+  hostId: string,
+  hostSecretContent: string,
+): Promise<boolean> {
+  try {
+    const user = await interaction.client.users.fetch(hostId)
+    await user.send(panel(hostSecretContent))
+    return true
+  } catch (error) {
+    console.error(`[Undercover] 私信主持人 ${hostId} 答案失败:`, error)
+    return false
+  }
+}
+
+async function sendPublicHostSecretRecoveryHint(interaction: UndercoverInteraction) {
+  const channel = interaction.channel
+  if (!channel || !('send' in channel)) return
+
+  await channel.send(panel(
+    '## ⚠️ 主持人答案发送失败\n\n' +
+    '主持人请使用 `/卧底 观众偷看` 查看本局答案。',
+  )).catch(error => {
+    console.error('[Undercover] 发送主持人答案公开兜底提示失败:', error)
+  })
 }
 
 async function sendWordDm(
@@ -1153,17 +1214,25 @@ async function handleHistoryButton(
   page: number,
   update = false,
 ) {
-  const game = UndercoverEngine.getGame(interaction.channelId)
-  if (!game) {
-    const payload = { content: '❌ 当前频道没有进行中的谁是卧底。', ephemeral: true }
-    if (update) await interaction.update({ content: payload.content, components: [] })
-    else await interaction.reply(payload)
-    return
-  }
+  if (update) await interaction.deferUpdate()
+  else await interaction.deferReply({ ephemeral: true })
 
-  const payload = await buildHistoryPanel(interaction, game, page, interaction.user.id)
-  if (update) await interaction.update(payload)
-  else await interaction.reply({ ...payload, ephemeral: true })
+  try {
+    const game = UndercoverEngine.getGame(interaction.channelId)
+    if (!game) {
+      await interaction.editReply({ content: '❌ 当前频道没有进行中的谁是卧底。', components: [] })
+      return
+    }
+
+    const payload = await buildHistoryPanel(interaction, game, page, interaction.user.id)
+    await interaction.editReply(payload)
+  } catch (error) {
+    console.error('[Undercover] 查看发言历史失败:', error)
+    await interaction.editReply({
+      content: '❌ 查看历史失败，请稍后再试。',
+      components: [],
+    }).catch(() => undefined)
+  }
 }
 
 async function handleCloseVoteButton(interaction: ButtonInteraction) {

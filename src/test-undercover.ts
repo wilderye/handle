@@ -291,6 +291,7 @@ assert.equal(deletedSpeechPanel, true)
 assert.equal(getPanelText(nextSpeechPanel).includes('本轮第一段发言'), true)
 assert.equal(getPanelText(nextSpeechPanel).includes('---'), true)
 let speechHistoryReply: any
+let speechHistoryDeferred = false
 await handleUndercoverButton({
   customId: 'undercover_history_open',
   channelId: speechPanelChannelId,
@@ -305,13 +306,67 @@ await handleUndercoverButton({
       fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
     },
   },
-  reply: async (payload: any) => {
+  deferReply: async (payload: any) => {
+    assert.equal(payload.ephemeral, true)
+    speechHistoryDeferred = true
+  },
+  editReply: async (payload: any) => {
     speechHistoryReply = payload
   },
 } as any)
-assert.equal(speechHistoryReply.ephemeral, true)
+assert.equal(speechHistoryDeferred, true)
 assert.equal(getPanelText(speechHistoryReply).includes('暂无发言记录'), true)
 assert.equal(speechHistoryReply.components.length, 1)
+
+const completedHistoryChannelId = 'undercover-completed-history-channel'
+await UndercoverEngine.startGame(completedHistoryChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '春天',
+  undercoverWord: '秋天',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(completedHistoryChannelId, 'h1')
+await UndercoverEngine.addPlayer(completedHistoryChannelId, 'h2')
+await UndercoverEngine.addPlayer(completedHistoryChannelId, 'h3')
+await UndercoverEngine.dealWords(completedHistoryChannelId, sequenceRng([0, 0, 0]))
+await UndercoverEngine.startSpeechRound(completedHistoryChannelId)
+const completedHistoryOrder = UndercoverEngine.getGame(completedHistoryChannelId)?.currentSpeech?.order ?? []
+for (const userId of completedHistoryOrder) {
+  const result = await UndercoverEngine.submitSpeech(completedHistoryChannelId, userId, `${userId} 的历史发言`)
+  assert.equal(result.ok, true)
+}
+
+let completedHistoryDeferred = false
+let completedHistoryReply: any
+await handleUndercoverButton({
+  customId: 'undercover_history_open',
+  channelId: completedHistoryChannelId,
+  user: { id: 'h1' },
+  guild: {
+    members: {
+      fetch: async (userId: string) => {
+        assert.equal(completedHistoryDeferred, true)
+        return { displayName: `历史玩家${userId}` }
+      },
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `历史玩家${userId}`, username: userId }),
+    },
+  },
+  deferReply: async (payload: any) => {
+    assert.equal(payload.ephemeral, true)
+    completedHistoryDeferred = true
+  },
+  editReply: async (payload: any) => {
+    completedHistoryReply = payload
+  },
+} as any)
+assert.equal(completedHistoryDeferred, true)
+assert.equal(getPanelText(completedHistoryReply).includes('的历史发言'), true)
+await UndercoverEngine.endGame(completedHistoryChannelId)
+console.log('✅ 查看历史会先完成交互响应，再加载历史内容')
 await UndercoverEngine.endGame(speechPanelChannelId)
 console.log('✅ 发言面板直接展示本轮发言，历史只展示已完成轮次')
 
@@ -405,6 +460,72 @@ assert.equal(officialPublicText.includes('玩家固定序号'), false)
 assert.equal(officialPublicText.includes('建议发言顺序'), false)
 assert.equal(officialPublicText.includes('**1.** 玩家p2\n**2.** 玩家p3\n**3.** 玩家p1'), true)
 assert.equal(getPanelText(officialSecretReply).includes('**卧底：**玩家p1'), true)
+
+const officialButtonFallbackChannelId = 'undercover-official-button-fallback-channel'
+await UndercoverEngine.startGame(officialButtonFallbackChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '咖啡',
+  undercoverWord: '奶茶',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(officialButtonFallbackChannelId, 'b1')
+await UndercoverEngine.addPlayer(officialButtonFallbackChannelId, 'b2')
+await UndercoverEngine.addPlayer(officialButtonFallbackChannelId, 'b3')
+let officialButtonDeferred = false
+let officialButtonFollowUp: any
+let officialButtonPublicPanel: any
+Math.random = sequenceRng([0, 0, 0])
+const originalConsoleError = console.error
+const hostSecretFallbackErrors: unknown[][] = []
+console.error = (...args: unknown[]) => {
+  hostSecretFallbackErrors.push(args)
+}
+try {
+  await handleUndercoverButton({
+    customId: 'undercover_official_start',
+    guild: {
+      members: {
+        fetch: async (userId: string) => ({ displayName: `按钮玩家${userId}` }),
+      },
+    },
+    client: {
+      users: {
+        fetch: async (userId: string) => ({
+          displayName: `按钮玩家${userId}`,
+          username: userId,
+          send: async () => undefined,
+        }),
+      },
+    },
+    channelId: officialButtonFallbackChannelId,
+    channel: {
+      send: async (payload: any) => {
+        officialButtonPublicPanel = payload
+      },
+    },
+    user: { id: hostId },
+    deferReply: async (payload: any) => {
+      assert.equal(payload.ephemeral, true)
+      officialButtonDeferred = true
+    },
+    editReply: async () => {
+      throw new Error('模拟按钮路径主持人私密面板展示失败')
+    },
+    followUp: async (payload: any) => {
+      officialButtonFollowUp = payload
+    },
+  } as any)
+} finally {
+  console.error = originalConsoleError
+  Math.random = originalRandom
+}
+assert.equal(hostSecretFallbackErrors.length, 1)
+assert.equal(officialButtonDeferred, true)
+assert.equal(getPanelText(officialButtonPublicPanel).includes('**发言顺序：**'), true)
+assert.equal(officialButtonFollowUp.ephemeral, true)
+assert.equal(getPanelText(officialButtonFollowUp).includes('**卧底：**按钮玩家b1'), true)
+await UndercoverEngine.endGame(officialButtonFallbackChannelId)
+console.log('✅ 报名面板正式开始按钮在原私密回复失败时会补发主持人答案')
 await UndercoverEngine.endGame(officialPanelChannelId)
 console.log('✅ 正式开始公开面板只展示随机固定发言顺序这一套编号')
 
@@ -446,17 +567,31 @@ assert.equal(
 )
 console.log('✅ 观众偷看信息包含平民词、卧底词、卧底和保密提醒')
 
-let hostPeekReply: any
+let hostPeekDeferred = false
+let hostPeekEdit: any
 await executeUndercoverCommand({
-  guild: {},
+  guild: {
+    members: {
+      fetch: async () => ({ displayName: '用户A' }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async () => ({ displayName: '用户A', username: 'user-a' }),
+    },
+  },
   channelId,
   user: { id: hostId },
   options: { getSubcommand: () => '观众偷看' },
-  reply: async (payload: any) => {
-    hostPeekReply = payload
+  deferReply: async (payload: any) => {
+    hostPeekDeferred = payload?.ephemeral === true
+  },
+  editReply: async (payload: any) => {
+    hostPeekEdit = payload
   },
 } as any)
-assert.equal(hostPeekReply.content, '❌ 主持人已经知道答案，不能使用观众偷看。')
+assert.equal(hostPeekDeferred, true)
+assert.equal(getPanelText(hostPeekEdit), audiencePeek)
 
 let playerPeekReply: any
 await executeUndercoverCommand({
@@ -495,7 +630,7 @@ await executeUndercoverCommand({
 } as any)
 assert.equal(audiencePeekDeferred, true)
 assert.equal(getPanelText(audiencePeekEdit), audiencePeek)
-console.log('✅ 观众偷看仅允许非主持人、非参与者使用，并会私密返回答案')
+console.log('✅ 观众偷看允许主持人和非参与旁观者使用，并会私密返回答案')
 
 await UndercoverEngine.endGame(channelId)
 assert.equal(UndercoverEngine.hasActiveGame(channelId), false)
