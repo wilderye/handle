@@ -824,7 +824,7 @@ async function sendVoteEndingSoon(
   if (!game?.currentVote || game.currentVote.endsAt !== expectedEndsAt) return
   const channel = context.channel
   if (!channel || !('send' in channel)) return
-  await channel.send('投票即将在 30 秒后结束。').catch(() => undefined)
+  await channel.send('投票即将在 **30** 秒后结束。').catch(() => undefined)
 }
 
 async function sendVoteTimeUp(
@@ -1305,24 +1305,24 @@ async function announceVoteResult(
     const tiedPlayers = await getDisplayNumberedPlayers(interaction, gameBeforeClose, result.tiedUserIds)
     await channel.send(panel(
       `## 🟰 投票平局\n\n` +
-      `当前是 ${tiedPlayers.map(player => `${player.number}. ${player.displayName}`).join(' 和 ')} 平局。`,
+      `当前是 ${tiedPlayers.map(player => `**${player.displayName}**`).join(' 和 ')} 平局。`,
     ))
     return
   }
 
   const eliminated = (await getDisplayNumberedPlayers(interaction, gameBeforeClose, [result.eliminatedUserId]))[0]
-  const label = eliminated ? `${eliminated.number}. ${eliminated.displayName}` : `<@${result.eliminatedUserId}>`
+  const label = eliminated ? eliminated.displayName : `<@${result.eliminatedUserId}>`
   if (result.role === 'undercover') {
     await channel.send(panel(
       `## 🏁 投票结果\n\n` +
-      `${label} 遗憾出局。\n\n卧底被淘汰，平民胜利。`,
+      `**${label}** 遗憾出局。\n\n卧底被淘汰，平民胜利。`,
     ))
     return
   }
 
   await channel.send(panel(
     `## 🗳️ 投票结果\n\n` +
-    `${label} 遗憾出局。`,
+    `**${label}** 遗憾出局。`,
   ))
 }
 
