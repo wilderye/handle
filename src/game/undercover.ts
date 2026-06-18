@@ -585,6 +585,24 @@ export function formatUndercoverPlayerList(players: DisplayNumberedPlayer[]): st
     .join('\n')
 }
 
+export function formatUndercoverPlayerVoteList(
+  players: DisplayNumberedPlayer[],
+  votes: Record<string, string>,
+): string {
+  const playersByUserId = new Map(players.map(player => [player.userId, player]))
+
+  return players
+    .map(player => {
+      const targetUserId = votes[player.userId]
+      const target = targetUserId ? playersByUserId.get(targetUserId) : undefined
+      const base = `${player.number}. ${sanitizeDisplayName(player.displayName)}`
+      return target
+        ? `${base} -> ${sanitizeDisplayName(target.displayName)}`
+        : base
+    })
+    .join('\n')
+}
+
 export function formatUndercoverVoteOptions(players: DisplayNumberedPlayer[]): Array<{
   label: string
   value: string

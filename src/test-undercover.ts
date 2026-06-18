@@ -12,6 +12,7 @@ import {
   formatHostSecret,
   formatLobbyMessage,
   formatUndercoverPlayerList,
+  formatUndercoverPlayerVoteList,
   formatUndercoverVoteOptions,
   formatPreparedEnd,
   formatSpeechOrder,
@@ -138,6 +139,23 @@ assert.deepEqual(
   ],
 )
 console.log('✅ 玩家列表和投票下拉选项使用固定序号加玩家名')
+
+const voteRelationPlayers = [
+  { userId: 'u1', number: 1, displayName: '小明' },
+  { userId: 'u2', number: 2, displayName: '小红' },
+  { userId: 'u3', number: 3, displayName: '小蓝' },
+  { userId: 'u4', number: 4, displayName: '小绿' },
+]
+assert.equal(
+  formatUndercoverPlayerVoteList(voteRelationPlayers, {
+    u1: 'u2',
+    u2: 'u3',
+    outsider: 'u1',
+    u3: 'missing-target',
+  }),
+  '1. 小明 -> 小红\n2. 小红 -> 小蓝\n3. 小蓝\n4. 小绿',
+)
+console.log('✅ 投票面板玩家列表会公开显示存活玩家当前投给谁，并忽略无效票')
 
 const speechStart = await UndercoverEngine.startSpeechRound(channelId, () => 0)
 assert.equal(speechStart.ok, true)
@@ -725,6 +743,7 @@ await UndercoverEngine.addPlayer(resurfaceChannelId, 'v3')
 await UndercoverEngine.dealWords(resurfaceChannelId, () => 0)
 await UndercoverEngine.startVote(resurfaceChannelId, 5)
 await UndercoverEngine.castVote(resurfaceChannelId, 'v1', 'v2')
+await UndercoverEngine.castVote(resurfaceChannelId, 'v2', 'v3')
 await UndercoverEngine.setVoteMessage(resurfaceChannelId, 'old-panel')
 const originalVote = UndercoverEngine.getGame(resurfaceChannelId)?.currentVote
 let deletedOldPanel = false
@@ -768,11 +787,15 @@ await executeUndercoverCommand({
   },
 } as any)
 const resurfacedVote = UndercoverEngine.getGame(resurfaceChannelId)?.currentVote
+const resurfaceButtonLabels = resurfaceReply.components?.[1]?.components?.map((component: any) => component.label)
 assert.equal(getPanelText(resurfaceReply).includes('谁是卧底投票'), true)
+assert.equal(getPanelText(resurfaceReply).includes('玩家v1 -> 玩家v2'), true)
+assert.equal(getPanelText(resurfaceReply).includes('玩家v2 -> 玩家v3'), true)
+assert.equal(resurfaceButtonLabels.includes('查看历史'), true)
 assert.equal(deletedOldPanel, true)
 assert.equal(resurfacedVote?.messageId, 'new-panel')
 assert.equal(resurfacedVote?.endsAt, originalVote?.endsAt)
-assert.deepEqual(resurfacedVote?.votes, { v1: 'v2' })
+assert.deepEqual(resurfacedVote?.votes, { v1: 'v2', v2: 'v3' })
 assert.equal(resurfaceFollowUp.ephemeral, true)
 assert.equal(resurfaceFollowUp.content.includes('讨论时间不变'), true)
 await UndercoverEngine.endGame(resurfaceChannelId)

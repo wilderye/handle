@@ -17,6 +17,7 @@ import {
   formatHostSecret,
   formatLobbyMessage,
   formatUndercoverPlayerList,
+  formatUndercoverPlayerVoteList,
   formatUndercoverVoteOptions,
   formatUndercoverVoteStatus,
   formatPreparedEnd,
@@ -726,7 +727,7 @@ async function buildVotePanel(interaction: UndercoverRuntimeContext, game: Under
 
   return panelWithRows(
     `## 🗳️ 谁是卧底投票\n\n` +
-    `**当前存活玩家：**\n${formatUndercoverPlayerList(candidates)}\n` +
+    `**当前存活玩家：**\n${formatUndercoverPlayerVoteList(candidates, vote?.votes ?? {})}\n` +
     timeLine +
     `\n${formatUndercoverVoteStatus({ candidates, votes: vote?.votes ?? {} })}`,
     [voteActionRow()],
