@@ -574,14 +574,14 @@ export function getRandomUndercoverWordPair(
 
 export function formatSpeechOrder(players: DisplayPlayer[]): string {
   const lines = players.map((player, index) => {
-    return `**${index + 1}.** ${sanitizeDisplayName(player.displayName)}`
+    return `**${index + 1}.** ${formatDiscordDisplayName(player.displayName)}`
   })
   return `**建议发言顺序：**\n${lines.join('\n')}`
 }
 
 export function formatUndercoverPlayerList(players: DisplayNumberedPlayer[]): string {
   return players
-    .map(player => `**${player.number}.** ${sanitizeDisplayName(player.displayName)}`)
+    .map(player => `**${player.number}.** ${formatDiscordDisplayName(player.displayName)}`)
     .join('\n')
 }
 
@@ -595,9 +595,9 @@ export function formatUndercoverPlayerVoteList(
     .map(player => {
       const targetUserId = votes[player.userId]
       const target = targetUserId ? playersByUserId.get(targetUserId) : undefined
-      const base = `${player.number}. ${sanitizeDisplayName(player.displayName)}`
+      const base = `${player.number}. ${formatDiscordDisplayName(player.displayName)}`
       return target
-        ? `${base} -> ${sanitizeDisplayName(target.displayName)}`
+        ? `${base} -> ${formatDiscordDisplayName(target.displayName)}`
         : base
     })
     .join('\n')
@@ -620,7 +620,7 @@ export function formatUndercoverVoteStatus(input: {
   const counts = tallyVotes(input.votes)
   const lines = input.candidates
     .filter(candidate => (counts[candidate.userId] ?? 0) > 0)
-    .map(candidate => `${candidate.number}. ${sanitizeDisplayName(candidate.displayName)}：${counts[candidate.userId]} 票`)
+    .map(candidate => `${candidate.number}. ${formatDiscordDisplayName(candidate.displayName)}：${counts[candidate.userId]} 票`)
 
   return lines.length > 0
     ? `**当前得票：**\n${lines.join('\n')}`
@@ -683,10 +683,10 @@ export function formatHostSecret(input: {
     `**平民词：**${input.civilianWord}\n` +
     `**卧底词：**${input.undercoverWord}\n` +
     `**可否撒谎：**${formatBooleanRule(input.allowLying)}\n\n` +
-    `**卧底：**${sanitizeDisplayName(input.undercoverName)}`
+    `**卧底：**${formatDiscordDisplayName(input.undercoverName)}`
 
   if (input.failedDmNames && input.failedDmNames.length > 0) {
-    content += `\n\n**私信失败：**${input.failedDmNames.map(sanitizeDisplayName).join('、')}`
+    content += `\n\n**私信失败：**${input.failedDmNames.map(formatDiscordDisplayName).join('、')}`
   }
 
   return content
@@ -701,7 +701,7 @@ export function formatEndReveal(input: {
     `## 🏁 谁是卧底结束\n\n` +
     `**平民词：**${input.civilianWord}\n` +
     `**卧底词：**${input.undercoverWord}\n\n` +
-    `**卧底：**${sanitizeDisplayName(input.undercoverName)}`
+    `**卧底：**${formatDiscordDisplayName(input.undercoverName)}`
   )
 }
 
@@ -714,7 +714,7 @@ export function formatAudiencePeek(input: {
     `## 👀 观众偷看\n\n` +
     `**平民词：**${input.civilianWord}\n` +
     `**卧底词：**${input.undercoverWord}\n\n` +
-    `**卧底：**${sanitizeDisplayName(input.undercoverName)}\n\n` +
+    `**卧底：**${formatDiscordDisplayName(input.undercoverName)}\n\n` +
     `请不要泄露词汇和卧底身份。`
   )
 }
@@ -733,12 +733,20 @@ export function formatLobbyMessage(input: {
 }): string {
   return (
     `## 🎭 谁是卧底报名开始\n\n` +
-    `**主持人：**${sanitizeDisplayName(input.hostName)}\n` +
+    `**主持人：**${formatDiscordDisplayName(input.hostName)}\n` +
     `**词汇来源：**${formatWordSource(input.wordSource)}\n` +
     `**可否撒谎：**${formatBooleanRule(input.allowLying)}\n` +
     `请点击 ${UNDERCOVER_JOIN_EMOJI} 报名。\n` +
     `主持人使用 \`/卧底 正式开始\` 停止报名并发词。`
   )
+}
+
+export function escapeDiscordMarkdownText(text: string): string {
+  return text.replace(/([\\*_~`>|])/gu, '\\$1')
+}
+
+export function formatDiscordDisplayName(name: string): string {
+  return escapeDiscordMarkdownText(sanitizeDisplayName(name))
 }
 
 function sanitizeDisplayName(name: string): string {

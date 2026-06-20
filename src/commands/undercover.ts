@@ -13,6 +13,8 @@ import {
 import {
   formatBooleanRule,
   formatAudiencePeek,
+  escapeDiscordMarkdownText,
+  formatDiscordDisplayName,
   formatEndReveal,
   formatHostSecret,
   formatLobbyMessage,
@@ -112,7 +114,7 @@ export const data = new SlashCommandBuilder()
     .setDescription('主持人开启一轮投票')
     .addIntegerOption(option => option
       .setName(DISCUSSION_MINUTES_OPTION)
-      .setDescription('可选讨论时间，单位分钟；时间到后提醒主持人结算')
+      .setDescription('可选讨论时间，单位分钟；时间到后自动结算')
       .setRequired(false)
       .setMinValue(1)
       .setMaxValue(240)
@@ -534,7 +536,7 @@ async function handleHelp(interaction: ChatInputCommandInteraction) {
         `\`/卧底 开始发言\`\n` +
         `开启一轮面板化发言，当前轮已发言内容会显示在面板上。仅本局主持人可用。\n\n` +
         `\`/卧底 投票\`\n` +
-        `开启或重新唤出投票面板；讨论时间到后只提醒主持人手动结算。仅本局主持人可用。\n\n` +
+        `开启或重新唤出投票面板；讨论时间到后自动结算，主持人也可以提前结束。仅本局主持人可用。\n\n` +
         `\`/卧底 游戏通知\`\n` +
         `通知\`小心她人！\`身份组成员前来玩游戏！仅本局主持人可用。\n\n` +
         `\`/卧底 观众偷看\`\n` +
@@ -666,9 +668,9 @@ function formatSpeechEntriesForPanel(
   return entries.map(entry => {
     const player = playersByUserId.get(entry.userId)
     const label = player
-      ? `${player.number}. ${player.displayName}`
+      ? `${player.number}. ${formatDiscordDisplayName(player.displayName)}`
       : `<@${entry.userId}>`
-    return `**${label}：**${entry.content}`
+    return `**${label}：**${escapeDiscordMarkdownText(entry.content)}`
   }).join('\n')
 }
 
@@ -836,10 +838,10 @@ async function sendVoteTimeUp(
   if (!game?.currentVote || game.currentVote.endsAt !== expectedEndsAt) return
 
   clearVoteTimers(channelId)
-  await replaceCurrentVotePanel(context, channelId, expectedEndsAt)
-  const channel = context.channel
-  if (!channel || !('send' in channel)) return
-  await channel.send('讨论时间已到，请主持人点击“结束投票”结算本轮投票。').catch(() => undefined)
+  const voteMessageId = game.currentVote.messageId
+  const result = await UndercoverEngine.closeVote(channelId)
+  await editVoteMessageClosed(context, voteMessageId)
+  await announceVoteResult(context, game, result.result)
 }
 
 export async function resumeUndercoverVoteTimers(client: Client) {
@@ -880,9 +882,9 @@ async function buildHistoryPanel(
   const lines = round.entries.map(entry => {
     const player = byUserId.get(entry.userId)
     const label = player
-      ? `${player.number}. ${player.displayName}`
+      ? `${player.number}. ${formatDiscordDisplayName(player.displayName)}`
       : `<@${entry.userId}>`
-    return `**${label}：**${entry.content}`
+    return `**${label}：**${escapeDiscordMarkdownText(entry.content)}`
   })
 
   const rows = total > 1 ? [historyPageRow(safePage, total, ownerId)] : []
@@ -1092,7 +1094,7 @@ export async function handleUndercoverSelect(interaction: StringSelectMenuIntera
   const target = game
     ? (await getDisplayNumberedPlayers(interaction, game, [targetUserId]))[0]
     : null
-  const targetLabel = target ? `${target.number}. ${target.displayName}` : `<@${targetUserId}>`
+  const targetLabel = target ? `${target.number}. ${formatDiscordDisplayName(target.displayName)}` : `<@${targetUserId}>`
   await interaction.update({ content: `✅ 已投给 ${targetLabel}。再次点击投票可以改票。`, components: [] })
 }
 
@@ -1305,13 +1307,13 @@ async function announceVoteResult(
     const tiedPlayers = await getDisplayNumberedPlayers(interaction, gameBeforeClose, result.tiedUserIds)
     await channel.send(panel(
       `## 🟰 投票平局\n\n` +
-      `当前是 ${tiedPlayers.map(player => `**${player.displayName}**`).join(' 和 ')} 平局。`,
+      `当前是 ${tiedPlayers.map(player => `**${formatDiscordDisplayName(player.displayName)}**`).join(' 和 ')} 平局。`,
     ))
     return
   }
 
   const eliminated = (await getDisplayNumberedPlayers(interaction, gameBeforeClose, [result.eliminatedUserId]))[0]
-  const label = eliminated ? eliminated.displayName : `<@${result.eliminatedUserId}>`
+  const label = eliminated ? formatDiscordDisplayName(eliminated.displayName) : `<@${result.eliminatedUserId}>`
   if (result.role === 'undercover') {
     await channel.send(panel(
       `## 🏁 投票结果\n\n` +

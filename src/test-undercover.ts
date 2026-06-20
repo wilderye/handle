@@ -245,7 +245,7 @@ Math.random = sequenceRng([0, 0])
 await executeUndercoverCommand({
   guild: {
     members: {
-      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+      fetch: async (userId: string) => ({ displayName: userId === 's2' ? '玩家*s2' : `玩家${userId}` }),
     },
   },
   client: {
@@ -272,11 +272,11 @@ await handleUndercoverModal({
   channelId: speechPanelChannelId,
   user: { id: 's2' },
   fields: {
-    getTextInputValue: () => '本轮第一段发言',
+    getTextInputValue: () => '**鲫鱼汤',
   },
   guild: {
     members: {
-      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+      fetch: async (userId: string) => ({ displayName: userId === 's2' ? '玩家*s2' : `玩家${userId}` }),
     },
   },
   client: {
@@ -306,7 +306,8 @@ await handleUndercoverModal({
   editReply: async () => undefined,
 } as any)
 assert.equal(deletedSpeechPanel, true)
-assert.equal(getPanelText(nextSpeechPanel).includes('本轮第一段发言'), true)
+assert.equal(getPanelText(nextSpeechPanel).includes('玩家\\*s2'), true)
+assert.equal(getPanelText(nextSpeechPanel).includes('\\*\\*鲫鱼汤'), true)
 assert.equal(getPanelText(nextSpeechPanel).includes('---'), true)
 let speechHistoryReply: any
 let speechHistoryDeferred = false
@@ -836,6 +837,15 @@ await executeUndercoverCommand({
   },
   channelId: timerChannelId,
   channel: {
+    messages: {
+      fetch: async (messageId: string) => {
+        assert.equal(messageId, 'timer-vote-panel')
+        return {
+          edit: async () => undefined,
+          delete: async () => undefined,
+        }
+      },
+    },
     send: async (payload: any) => {
       timerMessages.push(typeof payload === 'string' ? payload : getPanelText(payload))
       return { id: `timer-message-${timerMessages.length}` }
@@ -854,15 +864,18 @@ await executeUndercoverCommand({
 globalThis.setTimeout = originalSetTimeout
 globalThis.clearTimeout = originalClearTimeout
 assert.equal(getPanelText(timerPanelReply).includes('讨论截止'), true)
+assert.deepEqual(await UndercoverEngine.castVote(timerChannelId, 't1', 't1'), { ok: true })
+assert.deepEqual(await UndercoverEngine.castVote(timerChannelId, 't2', 't1'), { ok: true })
+assert.deepEqual(await UndercoverEngine.castVote(timerChannelId, 't3', 't2'), { ok: true })
 const dueTimer = capturedTimers.find(timer => timer.delay >= 59_000)
 assert.ok(dueTimer)
 dueTimer.callback()
 await new Promise(resolve => originalSetTimeout(resolve, 0))
-assert.equal(UndercoverEngine.getGame(timerChannelId)?.currentVote !== undefined, true)
-assert.deepEqual(UndercoverEngine.getGame(timerChannelId)?.aliveUserIds, ['t2', 't3', 't1'])
-assert.equal(timerMessages.some(message => message.includes('讨论时间已到')), true)
+assert.equal(UndercoverEngine.getGame(timerChannelId)?.currentVote, undefined)
+assert.deepEqual(UndercoverEngine.getGame(timerChannelId)?.aliveUserIds, ['t2', 't3'])
+assert.equal(timerMessages.some(message => message.includes('投票结果') && message.includes('玩家t1')), true)
 await UndercoverEngine.endGame(timerChannelId)
-console.log('✅ 投票讨论时间到点只提醒，不自动结算投票')
+console.log('✅ 投票讨论时间到点会自动结算并发送结果面板')
 
 const undercoverEliminatedChannelId = 'undercover-eliminated-channel'
 await UndercoverEngine.startGame(undercoverEliminatedChannelId, hostId, {
