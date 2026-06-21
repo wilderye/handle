@@ -1072,8 +1072,8 @@ export class UndercoverEngine {
     })
   }
 
-  static async setSpeechMessage(channelId: string, messageId: string): Promise<void> {
-    await withChannelWrite(channelId, async () => {
+  static async setSpeechMessage(channelId: string, messageId: string): Promise<string | undefined> {
+    return withChannelWrite(channelId, async () => {
       const game = normalizeGame(this.requireGame(channelId))
       if (!game.currentSpeech) return
       const previous = game.currentSpeech.messageId
@@ -1086,6 +1086,32 @@ export class UndercoverEngine {
         games.set(channelId, game)
         throw error
       }
+      return previous
+    })
+  }
+
+  static async clearCurrentSpeechIfMatches(
+    channelId: string,
+    match: { round: number; startedAt: number },
+  ): Promise<boolean> {
+    return withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      const currentSpeech = game.currentSpeech
+      if (!currentSpeech) return false
+      if (currentSpeech.round !== match.round || currentSpeech.startedAt !== match.startedAt) return false
+      if (currentSpeech.currentIndex !== 0 || currentSpeech.entries.length > 0) return false
+
+      const previous = game.currentSpeech
+      game.currentSpeech = undefined
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentSpeech = previous
+        games.set(channelId, game)
+        throw error
+      }
+      return true
     })
   }
 

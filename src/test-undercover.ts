@@ -362,12 +362,20 @@ await executeUndercoverCommand({
     },
   },
   channelId: speechPanelChannelId,
+  channel: {
+    send: async (payload: any) => {
+      speechPanelReply = payload
+      return { id: 'speech-panel-message' }
+    },
+  },
   user: { id: hostId },
   options: { getSubcommand: () => '开始发言' },
-  reply: async (payload: any) => {
-    speechPanelReply = payload
+  deferReply: async (payload: any) => {
+    assert.equal(payload.ephemeral, true)
   },
-  fetchReply: async () => ({ id: 'speech-panel-message' }),
+  editReply: async (payload: any) => {
+    assert.equal(String(payload).includes('已发布第 1 轮发言面板'), true)
+  },
 } as any)
 Math.random = originalRandom
 const speechPanelButtons = speechPanelReply.components?.[1]?.components?.map((component: any) => component.label)
@@ -444,6 +452,318 @@ await handleUndercoverButton({
 assert.equal(speechHistoryDeferred, true)
 assert.equal(getPanelText(speechHistoryReply).includes('暂无发言记录'), true)
 assert.equal(speechHistoryReply.components.length, 1)
+
+const speechStartFailureChannelId = 'undercover-speech-start-failure-channel'
+await UndercoverEngine.startGame(speechStartFailureChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '铅笔',
+  undercoverWord: '钢笔',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(speechStartFailureChannelId, 'f1')
+await UndercoverEngine.addPlayer(speechStartFailureChannelId, 'f2')
+await UndercoverEngine.addPlayer(speechStartFailureChannelId, 'f3')
+await UndercoverEngine.dealWords(speechStartFailureChannelId, () => 0)
+let failedSpeechStartDeferred = false
+let failedSpeechStartEdit: any
+const speechStartFailureConsoleError = console.error
+const speechStartFailureErrors: unknown[][] = []
+console.error = (...args: unknown[]) => {
+  speechStartFailureErrors.push(args)
+}
+try {
+  await executeUndercoverCommand({
+    guild: {
+      members: {
+        fetch: async (userId: string) => ({ displayName: `失败玩家${userId}` }),
+      },
+    },
+    client: {
+      users: {
+        fetch: async (userId: string) => ({ displayName: `失败玩家${userId}`, username: userId }),
+      },
+    },
+    channelId: speechStartFailureChannelId,
+    channel: {
+      send: async () => {
+        throw new Error('模拟发言面板发送失败')
+      },
+    },
+    user: { id: hostId },
+    options: { getSubcommand: () => '开始发言' },
+    deferReply: async (payload: any) => {
+      failedSpeechStartDeferred = payload?.ephemeral === true
+    },
+    editReply: async (payload: any) => {
+      failedSpeechStartEdit = payload
+    },
+  } as any)
+} finally {
+  console.error = speechStartFailureConsoleError
+}
+assert.equal(failedSpeechStartDeferred, true)
+assert.equal(UndercoverEngine.getGame(speechStartFailureChannelId)?.currentSpeech, undefined)
+assert.equal(String(failedSpeechStartEdit).includes('发言面板发送失败'), true)
+assert.equal(String(speechStartFailureErrors[0]?.[0]).includes('发送发言面板失败'), true)
+await UndercoverEngine.endGame(speechStartFailureChannelId)
+console.log('✅ 开始发言面板发送失败时会取消刚创建的发言轮并尽力提示主持人')
+
+const speechAckFailureChannelId = 'undercover-speech-ack-failure-channel'
+await UndercoverEngine.startGame(speechAckFailureChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '铅笔',
+  undercoverWord: '钢笔',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(speechAckFailureChannelId, 'a1')
+await UndercoverEngine.addPlayer(speechAckFailureChannelId, 'a2')
+await UndercoverEngine.addPlayer(speechAckFailureChannelId, 'a3')
+await UndercoverEngine.dealWords(speechAckFailureChannelId, () => 0)
+let ackFailureSpeechPanel: any
+const speechAckFailureConsoleError = console.error
+const speechAckFailureErrors: unknown[][] = []
+console.error = (...args: unknown[]) => {
+  speechAckFailureErrors.push(args)
+}
+try {
+  await executeUndercoverCommand({
+    guild: {
+      members: {
+        fetch: async (userId: string) => ({ displayName: `确认失败玩家${userId}` }),
+      },
+    },
+    client: {
+      users: {
+        fetch: async (userId: string) => ({ displayName: `确认失败玩家${userId}`, username: userId }),
+      },
+    },
+    channelId: speechAckFailureChannelId,
+    channel: {
+      send: async (payload: any) => {
+        ackFailureSpeechPanel = payload
+        return { id: 'speech-ack-failure-panel' }
+      },
+    },
+    user: { id: hostId },
+    options: { getSubcommand: () => '开始发言' },
+    deferReply: async (payload: any) => {
+      assert.equal(payload.ephemeral, true)
+    },
+    editReply: async () => {
+      throw new Error('模拟发言确认失败')
+    },
+  } as any)
+} finally {
+  console.error = speechAckFailureConsoleError
+}
+assert.equal(getPanelText(ackFailureSpeechPanel).includes('第 1 轮发言'), true)
+assert.equal(UndercoverEngine.getGame(speechAckFailureChannelId)?.currentSpeech?.messageId, 'speech-ack-failure-panel')
+assert.equal(String(speechAckFailureErrors[0]?.[0]).includes('发言面板确认回复失败'), true)
+await UndercoverEngine.endGame(speechAckFailureChannelId)
+console.log('✅ 开始发言公开面板已发出时，即使私密确认失败也不会回滚发言轮')
+
+const speechResurfaceChannelId = 'undercover-speech-resurface-channel'
+await UndercoverEngine.startGame(speechResurfaceChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '海洋',
+  undercoverWord: '湖泊',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(speechResurfaceChannelId, 'rs1')
+await UndercoverEngine.addPlayer(speechResurfaceChannelId, 'rs2')
+await UndercoverEngine.addPlayer(speechResurfaceChannelId, 'rs3')
+await UndercoverEngine.dealWords(speechResurfaceChannelId, () => 0)
+const speechResurfaceStart = await UndercoverEngine.startSpeechRound(speechResurfaceChannelId)
+assert.equal(speechResurfaceStart.ok, true)
+await UndercoverEngine.setSpeechMessage(speechResurfaceChannelId, 'speech-resurface-old-panel')
+let resurfacedSpeechPanel: any
+let speechResurfaceEdit: any
+let deletedOldSpeechResurfacePanel = false
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `重发玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `重发玩家${userId}`, username: userId }),
+    },
+  },
+  channelId: speechResurfaceChannelId,
+  channel: {
+    messages: {
+      fetch: async (messageId: string) => {
+        assert.equal(messageId, 'speech-resurface-old-panel')
+        return {
+          delete: async () => {
+            deletedOldSpeechResurfacePanel = true
+          },
+        }
+      },
+    },
+    send: async (payload: any) => {
+      resurfacedSpeechPanel = payload
+      return { id: 'speech-resurface-panel' }
+    },
+  },
+  user: { id: hostId },
+  options: { getSubcommand: () => '开始发言' },
+  deferReply: async (payload: any) => {
+    assert.equal(payload.ephemeral, true)
+  },
+  editReply: async (payload: any) => {
+    speechResurfaceEdit = payload
+  },
+} as any)
+assert.equal(getPanelText(resurfacedSpeechPanel).includes('第 1 轮发言'), true)
+assert.equal(resurfacedSpeechPanel.components?.[1]?.components?.some((component: any) => component.label === '跳过'), true)
+assert.equal(deletedOldSpeechResurfacePanel, true)
+assert.equal(UndercoverEngine.getGame(speechResurfaceChannelId)?.currentSpeech?.messageId, 'speech-resurface-panel')
+assert.equal(String(speechResurfaceEdit).includes('已重新发布当前发言面板'), true)
+await UndercoverEngine.endGame(speechResurfaceChannelId)
+console.log('✅ 主持人可重新唤出当前发言面板，残留发言状态不会卡死流程')
+
+const speechSubmitNextPanelFailureChannelId = 'undercover-speech-submit-next-panel-failure-channel'
+await UndercoverEngine.startGame(speechSubmitNextPanelFailureChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '雨伞',
+  undercoverWord: '阳伞',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(speechSubmitNextPanelFailureChannelId, 'sf1')
+await UndercoverEngine.addPlayer(speechSubmitNextPanelFailureChannelId, 'sf2')
+await UndercoverEngine.addPlayer(speechSubmitNextPanelFailureChannelId, 'sf3')
+await UndercoverEngine.dealWords(speechSubmitNextPanelFailureChannelId, () => 0)
+await UndercoverEngine.startSpeechRound(speechSubmitNextPanelFailureChannelId)
+await UndercoverEngine.setSpeechMessage(speechSubmitNextPanelFailureChannelId, 'submit-next-old-panel')
+const submitNextPanelFailureSpeaker = UndercoverEngine.getGame(
+  speechSubmitNextPanelFailureChannelId,
+)?.currentSpeech?.order[0]
+assert.equal(typeof submitNextPanelFailureSpeaker, 'string')
+let submitNextPanelFailureEdit: any
+let deletedSubmitNextOldPanel = false
+const submitNextPanelFailureConsoleError = console.error
+const submitNextPanelFailureErrors: unknown[][] = []
+console.error = (...args: unknown[]) => {
+  submitNextPanelFailureErrors.push(args)
+}
+try {
+  await handleUndercoverModal({
+    customId: `undercover_speech_modal_${speechSubmitNextPanelFailureChannelId}_${submitNextPanelFailureSpeaker}`,
+    channelId: speechSubmitNextPanelFailureChannelId,
+    user: { id: submitNextPanelFailureSpeaker },
+    fields: {
+      getTextInputValue: () => '第一位发言',
+    },
+    guild: {
+      members: {
+        fetch: async (userId: string) => ({ displayName: `提交失败玩家${userId}` }),
+      },
+    },
+    client: {
+      users: {
+        fetch: async (userId: string) => ({ displayName: `提交失败玩家${userId}`, username: userId }),
+      },
+    },
+    channel: {
+      messages: {
+        fetch: async (messageId: string) => {
+          assert.equal(messageId, 'submit-next-old-panel')
+          return {
+            delete: async () => {
+              deletedSubmitNextOldPanel = true
+            },
+          }
+        },
+      },
+      send: async () => {
+        throw new Error('模拟提交后下一面板发送失败')
+      },
+    },
+    deferReply: async (payload: any) => {
+      assert.equal(payload.ephemeral, true)
+    },
+    editReply: async (payload: any) => {
+      submitNextPanelFailureEdit = payload
+    },
+  } as any)
+} finally {
+  console.error = submitNextPanelFailureConsoleError
+}
+assert.equal(deletedSubmitNextOldPanel, true)
+assert.equal(UndercoverEngine.getGame(speechSubmitNextPanelFailureChannelId)?.currentSpeech?.currentIndex, 1)
+assert.equal(String(submitNextPanelFailureEdit).includes('发言已记录'), true)
+assert.equal(String(submitNextPanelFailureEdit).includes('发言面板发送失败'), true)
+assert.equal(String(submitNextPanelFailureErrors[0]?.[0]).includes('提交发言后发送下一面板失败'), true)
+await UndercoverEngine.endGame(speechSubmitNextPanelFailureChannelId)
+console.log('✅ 提交发言后下一面板发送失败时会保留进度并提示主持人重发')
+
+const speechSkipNextPanelFailureChannelId = 'undercover-speech-skip-next-panel-failure-channel'
+await UndercoverEngine.startGame(speechSkipNextPanelFailureChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '风筝',
+  undercoverWord: '气球',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(speechSkipNextPanelFailureChannelId, 'kf1')
+await UndercoverEngine.addPlayer(speechSkipNextPanelFailureChannelId, 'kf2')
+await UndercoverEngine.addPlayer(speechSkipNextPanelFailureChannelId, 'kf3')
+await UndercoverEngine.dealWords(speechSkipNextPanelFailureChannelId, () => 0)
+await UndercoverEngine.startSpeechRound(speechSkipNextPanelFailureChannelId)
+await UndercoverEngine.setSpeechMessage(speechSkipNextPanelFailureChannelId, 'skip-next-old-panel')
+let skipNextPanelFailureFollowUp: any
+let deletedSkipNextOldPanel = false
+const skipNextPanelFailureConsoleError = console.error
+const skipNextPanelFailureErrors: unknown[][] = []
+console.error = (...args: unknown[]) => {
+  skipNextPanelFailureErrors.push(args)
+}
+try {
+  await handleUndercoverButton({
+    customId: 'undercover_speech_skip',
+    channelId: speechSkipNextPanelFailureChannelId,
+    user: { id: hostId },
+    guild: {
+      members: {
+        fetch: async (userId: string) => ({ displayName: `跳过失败玩家${userId}` }),
+      },
+    },
+    client: {
+      users: {
+        fetch: async (userId: string) => ({ displayName: `跳过失败玩家${userId}`, username: userId }),
+      },
+    },
+    channel: {
+      messages: {
+        fetch: async (messageId: string) => {
+          assert.equal(messageId, 'skip-next-old-panel')
+          return {
+            delete: async () => {
+              deletedSkipNextOldPanel = true
+            },
+          }
+        },
+      },
+      send: async () => {
+        throw new Error('模拟跳过后下一面板发送失败')
+      },
+    },
+    deferUpdate: async () => undefined,
+    followUp: async (payload: any) => {
+      skipNextPanelFailureFollowUp = payload
+    },
+  } as any)
+} finally {
+  console.error = skipNextPanelFailureConsoleError
+}
+assert.equal(deletedSkipNextOldPanel, true)
+assert.equal(UndercoverEngine.getGame(speechSkipNextPanelFailureChannelId)?.currentSpeech?.currentIndex, 1)
+assert.equal(String(skipNextPanelFailureFollowUp?.content).includes('已跳过当前发言人'), true)
+assert.equal(String(skipNextPanelFailureFollowUp?.content).includes('发言面板发送失败'), true)
+assert.equal(String(skipNextPanelFailureErrors[0]?.[0]).includes('跳过发言后发送下一面板失败'), true)
+await UndercoverEngine.endGame(speechSkipNextPanelFailureChannelId)
+console.log('✅ 跳过发言后下一面板发送失败时会保留进度并提示主持人重发')
 
 const skipButtonChannelId = 'undercover-skip-button-channel'
 await UndercoverEngine.startGame(skipButtonChannelId, hostId, {

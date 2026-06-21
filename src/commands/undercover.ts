@@ -360,13 +360,47 @@ async function handleStartSpeech(interaction: ChatInputCommandInteraction) {
     return
   }
 
-  const result = await UndercoverEngine.startSpeechRound(interaction.channelId)
-  if (!result.ok || !result.speech) {
-    await interaction.reply({ content: `❌ ${result.error ?? '无法开始发言。'}`, ephemeral: true })
+  await interaction.deferReply({ ephemeral: true })
+
+  if (game.currentSpeech) {
+    let panelResult: Awaited<ReturnType<typeof sendSpeechPanel>>
+    try {
+      panelResult = await sendSpeechPanel(interaction, game.currentSpeech, 'send')
+    } catch (error) {
+      console.error('[Undercover] 重新发布发言面板失败:', error)
+      await interaction.editReply('❌ 发言面板发送失败，请检查机器人在当前频道的发消息权限后重试。')
+        .catch(() => undefined)
+      return
+    }
+    await deleteChannelMessage(interaction, panelResult.previousMessageId)
+    await interaction.editReply('✅ 已重新发布当前发言面板。')
+      .catch(error => console.error('[Undercover] 发言面板确认回复失败:', error))
     return
   }
 
-  await sendSpeechPanel(interaction, result.speech, 'reply')
+  const result = await UndercoverEngine.startSpeechRound(interaction.channelId)
+  if (!result.ok || !result.speech) {
+    await interaction.editReply(`❌ ${result.error ?? '无法开始发言。'}`)
+    return
+  }
+
+  try {
+    await sendSpeechPanel(interaction, result.speech, 'send')
+  } catch (error) {
+    console.error('[Undercover] 发送发言面板失败:', error)
+    await UndercoverEngine.clearCurrentSpeechIfMatches(interaction.channelId, {
+      round: result.speech.round,
+      startedAt: result.speech.startedAt,
+    }).catch(rollbackError => {
+      console.error('[Undercover] 回滚发言轮失败:', rollbackError)
+      return false
+    })
+    await interaction.editReply('❌ 发言面板发送失败，已取消本轮发言，可稍后重试。')
+      .catch(() => undefined)
+    return
+  }
+  await interaction.editReply(`✅ 已发布第 ${result.speech.round} 轮发言面板。`)
+    .catch(error => console.error('[Undercover] 发言面板确认回复失败:', error))
 }
 
 async function handleStartVote(interaction: ChatInputCommandInteraction) {
@@ -714,16 +748,11 @@ async function sendSpeechPanel(
   interaction: UndercoverInteraction,
   speech: UndercoverCurrentSpeech,
   mode: 'reply' | 'send',
-) {
+): Promise<{ messageId: string; previousMessageId?: string }> {
   const channelId = interaction.channelId
-  if (!channelId) return
+  if (!channelId) throw new Error('无法确认当前频道。')
   const game = UndercoverEngine.getGame(channelId)
-  if (!game) {
-    if ('reply' in interaction) {
-      await interaction.reply({ content: '❌ 当前频道没有进行中的谁是卧底。', ephemeral: true })
-    }
-    return
-  }
+  if (!game) throw new Error('当前频道没有进行中的谁是卧底。')
 
   const payload = await buildSpeechPanel(interaction, game, speech)
   let message: any
@@ -732,11 +761,20 @@ async function sendSpeechPanel(
     message = await interaction.fetchReply()
   } else {
     const channel = interaction.channel
-    if (!channel || !('send' in channel)) return
+    if (!channel || !('send' in channel)) throw new Error('无法在当前频道发送发言面板。')
     message = await channel.send(payload)
   }
+  if (!message?.id) throw new Error('发言面板发送后无法获取消息 ID。')
 
-  await UndercoverEngine.setSpeechMessage(channelId, message.id)
+  try {
+    const previousMessageId = await UndercoverEngine.setSpeechMessage(channelId, message.id)
+    return { messageId: message.id, previousMessageId }
+  } catch (error) {
+    if (message && 'delete' in message && typeof message.delete === 'function') {
+      await message.delete().catch(() => undefined)
+    }
+    throw error
+  }
 }
 
 async function buildVotePanel(interaction: UndercoverRuntimeContext, game: UndercoverGame) {
@@ -1153,7 +1191,15 @@ export async function handleUndercoverModal(interaction: ModalSubmitInteraction)
 
   const game = UndercoverEngine.getGame(channelId)
   if (game?.currentSpeech) {
-    await sendSpeechPanel(interaction, game.currentSpeech, 'send')
+    try {
+      await sendSpeechPanel(interaction, game.currentSpeech, 'send')
+    } catch (error) {
+      console.error('[Undercover] 提交发言后发送下一面板失败:', error)
+      await interaction.editReply(
+        '✅ 发言已记录，但发言面板发送失败。请主持人使用 `/卧底 开始发言` 重新发布当前发言面板。',
+      )
+      return
+    }
   }
   await interaction.editReply('✅ 发言已记录，已轮到下一位玩家。')
 }
@@ -1248,7 +1294,16 @@ async function handleSkipSpeechButton(interaction: ButtonInteraction) {
 
   const game = UndercoverEngine.getGame(channelId)
   if (game?.currentSpeech) {
-    await sendSpeechPanel(interaction, game.currentSpeech, 'send')
+    try {
+      await sendSpeechPanel(interaction, game.currentSpeech, 'send')
+    } catch (error) {
+      console.error('[Undercover] 跳过发言后发送下一面板失败:', error)
+      await interaction.followUp({
+        content: '✅ 已跳过当前发言人，但发言面板发送失败。请主持人使用 `/卧底 开始发言` 重新发布当前发言面板。',
+        ephemeral: true,
+      })
+      return
+    }
   }
   await interaction.followUp({ content: '✅ 已跳过当前发言人，已轮到下一位玩家。', ephemeral: true })
 }
