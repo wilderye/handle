@@ -85,7 +85,7 @@ export interface UndercoverAssignment {
 export interface UndercoverDealResult {
   civilianWord: string
   undercoverWord: string
-  undercoverUserId: string
+  undercoverUserIds: string[]
   assignments: UndercoverAssignment[]
 }
 
@@ -107,9 +107,13 @@ export type UndercoverCloseVoteResult =
   | {
       type: 'eliminated'
       eliminatedUserId: string
-      role: 'civilian' | 'undercover'
       votes: Record<string, number>
     }
+
+interface DealWordsOptions {
+  undercoverCount?: number
+  rng?: () => number
+}
 
 interface UndercoverStore {
   loadGames(): Promise<UndercoverGame[]>
@@ -381,6 +385,7 @@ function cloneGame(game: UndercoverGame): UndercoverGame {
     deal: game.deal
       ? {
           ...game.deal,
+          undercoverUserIds: [...game.deal.undercoverUserIds],
           assignments: game.deal.assignments.map(assignment => ({ ...assignment })),
         }
       : undefined,
@@ -519,10 +524,13 @@ function parseStoredDeal(value: unknown): UndercoverDealResult | undefined {
   if (
     typeof raw.civilianWord !== 'string' ||
     typeof raw.undercoverWord !== 'string' ||
-    typeof raw.undercoverUserId !== 'string'
+    !Array.isArray(raw.undercoverUserIds)
   ) {
     return undefined
   }
+
+  const undercoverUserIds = raw.undercoverUserIds
+    .filter((userId: unknown): userId is string => typeof userId === 'string')
 
   const assignments = Array.isArray(raw.assignments)
     ? raw.assignments
@@ -541,7 +549,7 @@ function parseStoredDeal(value: unknown): UndercoverDealResult | undefined {
   return {
     civilianWord: raw.civilianWord,
     undercoverWord: raw.undercoverWord,
-    undercoverUserId: raw.undercoverUserId,
+    undercoverUserIds,
     assignments,
   }
 }
@@ -663,6 +671,10 @@ export function formatWordSource(source: UndercoverWordSource): string {
   return source === 'random' ? '随机发词' : '自定义发词'
 }
 
+function formatUndercoverNames(names: string[]): string {
+  return names.map(formatDiscordDisplayName).join('、')
+}
+
 function tallyVotes(votes: Record<string, string>): Record<string, number> {
   const counts: Record<string, number> = {}
   for (const targetId of Object.values(votes)) {
@@ -674,7 +686,7 @@ function tallyVotes(votes: Record<string, string>): Record<string, number> {
 export function formatHostSecret(input: {
   civilianWord: string
   undercoverWord: string
-  undercoverName: string
+  undercoverNames: string[]
   allowLying: boolean
   failedDmNames?: string[]
 }): string {
@@ -683,7 +695,7 @@ export function formatHostSecret(input: {
     `**平民词：**${input.civilianWord}\n` +
     `**卧底词：**${input.undercoverWord}\n` +
     `**可否撒谎：**${formatBooleanRule(input.allowLying)}\n\n` +
-    `**卧底：**${formatDiscordDisplayName(input.undercoverName)}`
+    `**卧底：**${formatUndercoverNames(input.undercoverNames)}`
 
   if (input.failedDmNames && input.failedDmNames.length > 0) {
     content += `\n\n**私信失败：**${input.failedDmNames.map(formatDiscordDisplayName).join('、')}`
@@ -695,26 +707,26 @@ export function formatHostSecret(input: {
 export function formatEndReveal(input: {
   civilianWord: string
   undercoverWord: string
-  undercoverName: string
+  undercoverNames: string[]
 }): string {
   return (
     `## 🏁 谁是卧底结束\n\n` +
     `**平民词：**${input.civilianWord}\n` +
     `**卧底词：**${input.undercoverWord}\n\n` +
-    `**卧底：**${formatDiscordDisplayName(input.undercoverName)}`
+    `**卧底：**${formatUndercoverNames(input.undercoverNames)}`
   )
 }
 
 export function formatAudiencePeek(input: {
   civilianWord: string
   undercoverWord: string
-  undercoverName: string
+  undercoverNames: string[]
 }): string {
   return (
     `## 👀 观众偷看\n\n` +
     `**平民词：**${input.civilianWord}\n` +
     `**卧底词：**${input.undercoverWord}\n\n` +
-    `**卧底：**${formatDiscordDisplayName(input.undercoverName)}\n\n` +
+    `**卧底：**${formatUndercoverNames(input.undercoverNames)}\n\n` +
     `请不要泄露词汇和卧底身份。`
   )
 }
@@ -938,7 +950,16 @@ export class UndercoverEngine {
     }
   }
 
-  static async dealWords(channelId: string, rng: () => number = Math.random): Promise<UndercoverDealResult> {
+  static async dealWords(
+    channelId: string,
+    options: DealWordsOptions | (() => number) = {},
+  ): Promise<UndercoverDealResult> {
+    const normalizedOptions: DealWordsOptions = typeof options === 'function'
+      ? { rng: options }
+      : options
+    const rng = normalizedOptions.rng ?? Math.random
+    const undercoverCount = normalizedOptions.undercoverCount ?? 1
+
     return withChannelWrite(channelId, async () => {
       const game = this.requireGame(channelId)
       if (game.dealtAt) {
@@ -947,19 +968,31 @@ export class UndercoverEngine {
       if (game.players.length < UNDERCOVER_MIN_PLAYERS) {
         throw new Error(`至少需要 ${UNDERCOVER_MIN_PLAYERS} 名玩家才能发词。`)
       }
+      if (!Number.isInteger(undercoverCount) || undercoverCount < 1) {
+        throw new Error('卧底数量至少为 1。')
+      }
+      if (undercoverCount >= game.players.length) {
+        throw new Error(`卧底数量必须小于参与者数量。当前玩家数：${game.players.length}`)
+      }
 
-      const undercoverIndex = Math.min(
-        game.players.length - 1,
-        Math.floor(rng() * game.players.length),
-      )
-      const undercoverUserId = game.players[undercoverIndex].userId
+      const availableUserIds = game.players.map(player => player.userId)
+      const undercoverUserIds: string[] = []
+      for (let count = 0; count < undercoverCount; count += 1) {
+        const undercoverIndex = Math.min(
+          availableUserIds.length - 1,
+          Math.floor(rng() * availableUserIds.length),
+        )
+        const [undercoverUserId] = availableUserIds.splice(undercoverIndex, 1)
+        undercoverUserIds.push(undercoverUserId)
+      }
+      const undercoverUserIdSet = new Set(undercoverUserIds)
 
       const result: UndercoverDealResult = {
         civilianWord: game.civilianWord,
         undercoverWord: game.undercoverWord,
-        undercoverUserId,
+        undercoverUserIds,
         assignments: game.players.map(player => {
-          const isUndercover = player.userId === undercoverUserId
+          const isUndercover = undercoverUserIdSet.has(player.userId)
           return {
             userId: player.userId,
             role: isUndercover ? 'undercover' : 'civilian',
@@ -1127,6 +1160,76 @@ export class UndercoverEngine {
     })
   }
 
+  static async skipCurrentSpeech(
+    channelId: string,
+    hostId: string,
+  ): Promise<{
+    ok: boolean
+    completed?: boolean
+    round?: number
+    skippedUserId?: string
+    currentUserId?: string
+    error?: string
+  }> {
+    return withChannelWrite(channelId, async () => {
+      const game = normalizeGame(this.requireGame(channelId))
+      if (game.hostId !== hostId) {
+        return { ok: false, error: '只有本局主持人可以跳过发言。' }
+      }
+
+      const speech = game.currentSpeech
+      if (!speech) return { ok: false, error: '当前没有进行中的发言轮。' }
+
+      const skippedUserId = speech.order[speech.currentIndex]
+      if (!skippedUserId) return { ok: false, error: '当前没有可跳过的发言玩家。' }
+
+      const previousSpeech = cloneCurrentSpeech(speech)
+      const previousRounds = game.speechRounds?.map(cloneSpeechRound) ?? []
+      speech.currentIndex += 1
+
+      let result: {
+        ok: boolean
+        completed: boolean
+        round: number
+        skippedUserId: string
+        currentUserId?: string
+      }
+
+      if (speech.currentIndex >= speech.order.length) {
+        const round: UndercoverSpeechRound = {
+          round: speech.round,
+          order: [...speech.order],
+          entries: speech.entries.map(entry => ({ ...entry })),
+          completedAt: Date.now(),
+        }
+        game.speechRounds = [...previousRounds, round]
+        game.currentSpeech = undefined
+        result = { ok: true, completed: true, round: round.round, skippedUserId }
+      } else {
+        game.currentSpeech = speech
+        result = {
+          ok: true,
+          completed: false,
+          round: speech.round,
+          skippedUserId,
+          currentUserId: speech.order[speech.currentIndex],
+        }
+      }
+
+      games.set(channelId, game)
+      try {
+        await store.saveGame(game)
+      } catch (error) {
+        game.currentSpeech = previousSpeech
+        game.speechRounds = previousRounds
+        games.set(channelId, game)
+        throw error
+      }
+
+      return result
+    })
+  }
+
   static async startVote(
     channelId: string,
     discussionMinutes?: number | null,
@@ -1240,13 +1343,11 @@ export class UndercoverEngine {
         }
       } else {
         const eliminatedUserId = topUserIds[0]
-        const role = game.deal?.undercoverUserId === eliminatedUserId ? 'undercover' : 'civilian'
         game.aliveUserIds = previousAliveUserIds.filter(userId => userId !== eliminatedUserId)
         game.eliminatedUserIds = [...previousEliminatedUserIds, eliminatedUserId]
         result = {
           type: 'eliminated',
           eliminatedUserId,
-          role,
           votes: counts,
         }
       }

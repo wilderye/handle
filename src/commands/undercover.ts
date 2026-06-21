@@ -57,10 +57,12 @@ const panelWithRows = (content: string, rows: any[] = []) => ({
 const WORD_SOURCE_OPTION = '词汇来源'
 const ALLOW_LYING_OPTION = '可否撒谎'
 const DISCUSSION_MINUTES_OPTION = '讨论时间'
+const UNDERCOVER_COUNT_OPTION = '卧底数量'
 const CUSTOM_WORD_SOURCE: UndercoverWordSource = 'custom'
 const RANDOM_WORD_SOURCE: UndercoverWordSource = 'random'
 const UNDERCOVER_START_BUTTON_ID = 'undercover_official_start'
 const UNDERCOVER_SPEECH_BUTTON_ID = 'undercover_speech_submit'
+const UNDERCOVER_SKIP_SPEECH_BUTTON_ID = 'undercover_speech_skip'
 const UNDERCOVER_SPEECH_MODAL_ID = 'undercover_speech_modal'
 const UNDERCOVER_SPEECH_INPUT_ID = 'speech_content'
 const UNDERCOVER_VOTE_BUTTON_ID = 'undercover_vote_open'
@@ -104,6 +106,12 @@ export const data = new SlashCommandBuilder()
   .addSubcommand(sub => sub
     .setName('正式开始')
     .setDescription('停止报名，BOT将词汇私信给参与者')
+    .addIntegerOption(option => option
+      .setName(UNDERCOVER_COUNT_OPTION)
+      .setDescription('可选卧底数量，不填默认 1；按钮正式开始固定为 1')
+      .setRequired(false)
+      .setMinValue(1)
+    )
   )
   .addSubcommand(sub => sub
     .setName('开始发言')
@@ -330,8 +338,9 @@ async function handleOfficialStart(interaction: ChatInputCommandInteraction) {
     return
   }
 
+  const undercoverCount = interaction.options.getInteger(UNDERCOVER_COUNT_OPTION) ?? 1
   await interaction.deferReply({ ephemeral: true })
-  await dealAndNotify(interaction)
+  await dealAndNotify(interaction, undercoverCount)
 }
 
 async function handleStartSpeech(interaction: ChatInputCommandInteraction) {
@@ -470,11 +479,13 @@ async function handleAudiencePeek(interaction: ChatInputCommandInteraction) {
   }
 
   await interaction.deferReply({ ephemeral: true })
-  const undercoverName = await resolveDisplayName(interaction, game.deal.undercoverUserId)
+  const undercoverNames = await Promise.all(
+    game.deal.undercoverUserIds.map(userId => resolveDisplayName(interaction, userId)),
+  )
   await interaction.editReply(panel(formatAudiencePeek({
     civilianWord: game.deal.civilianWord,
     undercoverWord: game.deal.undercoverWord,
-    undercoverName,
+    undercoverNames,
   })))
 }
 
@@ -509,11 +520,13 @@ async function buildEndContent(
     return formatPreparedEnd()
   }
 
-  const undercoverName = await resolveDisplayName(interaction, game.deal.undercoverUserId)
+  const undercoverNames = await Promise.all(
+    game.deal.undercoverUserIds.map(userId => resolveDisplayName(interaction, userId)),
+  )
   return formatEndReveal({
     civilianWord: game.deal.civilianWord,
     undercoverWord: game.deal.undercoverWord,
-    undercoverName,
+    undercoverNames,
   })
 }
 
@@ -522,9 +535,9 @@ async function handleHelp(interaction: ChatInputCommandInteraction) {
     components: [box([
       text(
         `## 🎭 “谁是卧底”游戏说明\n\n` +
-        `多数玩家会拿到同一个平民词，只有 1 名玩家拿到不同但相近的卧底词。\n\n` +
+        `多数玩家会拿到同一个平民词，一名或多名玩家会拿到不同但相近的卧底词。\n\n` +
         `玩家轮流描述自己的词，不能直接说出词语本身。平民要找出卧底，卧底要隐藏身份、混入平民。本局是否允许撒谎，以主持人设置为准。\n\n` +
-        `讨论结束后，由大家自行投票或由主持人组织判断。游戏结束时，Bot 会公布平民词、卧底词和卧底是谁。`,
+        `讨论结束后，由大家投票或由主持人组织判断；Bot 只负责记录淘汰结果，胜负由主持人宣布。游戏结束时，Bot 会公布平民词、卧底词和卧底是谁。`,
       ),
       sep(),
       text(
@@ -532,7 +545,7 @@ async function handleHelp(interaction: ChatInputCommandInteraction) {
         `\`/卧底 报名阶段\`\n` +
         `用户成为主持人，决定词汇并进入报名阶段。\n\n` +
         `\`/卧底 正式开始\`\n` +
-        `停止报名，Bot 将词汇私信给参与者，并公布固定发言顺序。仅本局主持人可用。\n\n` +
+        `停止报名，Bot 将词汇私信给参与者，并公布固定发言顺序；可选卧底数量，不填默认 1。仅本局主持人可用。\n\n` +
         `\`/卧底 开始发言\`\n` +
         `开启一轮面板化发言，当前轮已发言内容会显示在面板上。仅本局主持人可用。\n\n` +
         `\`/卧底 投票\`\n` +
@@ -564,6 +577,7 @@ function speechButtonRow() {
     components: [
       { type: 2, style: 1, label: '发言', custom_id: UNDERCOVER_SPEECH_BUTTON_ID },
       { type: 2, style: 2, label: '查看历史', custom_id: UNDERCOVER_HISTORY_BUTTON_ID },
+      { type: 2, style: 2, label: '跳过', custom_id: UNDERCOVER_SKIP_SPEECH_BUTTON_ID },
     ],
   }
 }
@@ -674,6 +688,14 @@ function formatSpeechEntriesForPanel(
   }).join('\n')
 }
 
+function formatCompletedSpeechEntriesForPanel(
+  entries: UndercoverCurrentSpeech['entries'],
+  playersByUserId: Map<string, { number: number; displayName: string }>,
+): string {
+  const formatted = formatSpeechEntriesForPanel(entries, playersByUserId)
+  return formatted || '暂无发言。'
+}
+
 async function buildCompletedSpeechPanel(
   interaction: UndercoverInteraction,
   game: UndercoverGame,
@@ -681,7 +703,7 @@ async function buildCompletedSpeechPanel(
 ) {
   const players = await getDisplayNumberedPlayers(interaction, game, round.order)
   const byUserId = new Map(players.map(player => [player.userId, player]))
-  const entries = formatSpeechEntriesForPanel(round.entries, byUserId)
+  const entries = formatCompletedSpeechEntriesForPanel(round.entries, byUserId)
   return panel(
     `## ✅ 第 ${round.round} 轮发言完毕\n\n` +
     `**本轮发言：**\n${entries}`,
@@ -879,22 +901,16 @@ async function buildHistoryPanel(
 
   const players = await getDisplayNumberedPlayers(interaction, game, round.order)
   const byUserId = new Map(players.map(player => [player.userId, player]))
-  const lines = round.entries.map(entry => {
-    const player = byUserId.get(entry.userId)
-    const label = player
-      ? `${player.number}. ${formatDiscordDisplayName(player.displayName)}`
-      : `<@${entry.userId}>`
-    return `**${label}：**${escapeDiscordMarkdownText(entry.content)}`
-  })
+  const entries = formatCompletedSpeechEntriesForPanel(round.entries, byUserId)
 
   const rows = total > 1 ? [historyPageRow(safePage, total, ownerId)] : []
   return panelWithRows(
-    `## 📜 发言历史 (${safePage}/${total})\n\n${lines.join('\n')}`,
+    `## 📜 发言历史 (${safePage}/${total})\n\n${entries}`,
     rows,
   )
 }
 
-async function dealAndNotify(interaction: UndercoverInteraction) {
+async function dealAndNotify(interaction: UndercoverInteraction, undercoverCount: number) {
   const guild = interaction.guild
   const channel = interaction.channel
   const channelId = interaction.channelId
@@ -906,7 +922,7 @@ async function dealAndNotify(interaction: UndercoverInteraction) {
 
   let result
   try {
-    result = await UndercoverEngine.dealWords(channelId)
+    result = await UndercoverEngine.dealWords(channelId, { undercoverCount })
   } catch (error: any) {
     await interaction.editReply(`❌ ${error.message}`)
     return
@@ -939,13 +955,13 @@ async function dealAndNotify(interaction: UndercoverInteraction) {
 
   await channel.send(panel(publicContent))
 
-  const undercoverName = displayPlayers.find(player => player.userId === result.undercoverUserId)?.displayName
-    ?? '未知玩家'
+  const displayNameByUserId = new Map(displayPlayers.map(player => [player.userId, player.displayName]))
+  const undercoverNames = result.undercoverUserIds.map(userId => displayNameByUserId.get(userId) ?? '未知玩家')
 
   await sendHostSecretWithFallback(interaction, game, formatHostSecret({
     civilianWord: result.civilianWord,
     undercoverWord: result.undercoverWord,
-    undercoverName,
+    undercoverNames,
     allowLying: game.allowLying,
     failedDmNames,
   }))
@@ -1044,6 +1060,11 @@ export async function handleUndercoverButton(interaction: ButtonInteraction) {
 
   if (interaction.customId === UNDERCOVER_SPEECH_BUTTON_ID) {
     await handleSpeechButton(interaction)
+    return
+  }
+
+  if (interaction.customId === UNDERCOVER_SKIP_SPEECH_BUTTON_ID) {
+    await handleSkipSpeechButton(interaction)
     return
   }
 
@@ -1163,7 +1184,7 @@ async function handleOfficialStartButton(interaction: ButtonInteraction) {
   }
 
   await interaction.deferReply({ ephemeral: true })
-  await dealAndNotify(interaction)
+  await dealAndNotify(interaction, 1)
 }
 
 async function handleSpeechButton(interaction: ButtonInteraction) {
@@ -1189,6 +1210,47 @@ async function handleSpeechButton(interaction: ButtonInteraction) {
     .setRequired(true)
   modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(speechInput))
   await interaction.showModal(modal)
+}
+
+async function handleSkipSpeechButton(interaction: ButtonInteraction) {
+  const channelId = interaction.channelId
+  const beforeGame = UndercoverEngine.getGame(channelId)
+  if (!beforeGame?.currentSpeech) {
+    await interaction.reply({ content: '❌ 当前没有进行中的发言轮。', ephemeral: true })
+    return
+  }
+
+  if (beforeGame.hostId !== interaction.user.id) {
+    await interaction.reply({ content: '❌ 只有本局主持人可以跳过发言。', ephemeral: true })
+    return
+  }
+
+  const previousMessageId = beforeGame.currentSpeech.messageId
+  await interaction.deferUpdate()
+  const result = await UndercoverEngine.skipCurrentSpeech(channelId, interaction.user.id)
+  if (!result.ok) {
+    await interaction.followUp({ content: `❌ ${result.error ?? '跳过发言失败。'}`, ephemeral: true })
+    return
+  }
+
+  await deleteChannelMessage(interaction, previousMessageId)
+
+  if (result.completed) {
+    const channel = interaction.channel
+    const game = UndercoverEngine.getGame(channelId)
+    const round = game?.speechRounds?.find(item => item.round === result.round)
+    if (channel && 'send' in channel && game && round) {
+      await channel.send(await buildCompletedSpeechPanel(interaction, game, round))
+    }
+    await interaction.followUp({ content: '✅ 已跳过当前发言人，本轮发言已结束。', ephemeral: true })
+    return
+  }
+
+  const game = UndercoverEngine.getGame(channelId)
+  if (game?.currentSpeech) {
+    await sendSpeechPanel(interaction, game.currentSpeech, 'send')
+  }
+  await interaction.followUp({ content: '✅ 已跳过当前发言人，已轮到下一位玩家。', ephemeral: true })
 }
 
 async function handleVoteButton(interaction: ButtonInteraction) {
@@ -1314,14 +1376,6 @@ async function announceVoteResult(
 
   const eliminated = (await getDisplayNumberedPlayers(interaction, gameBeforeClose, [result.eliminatedUserId]))[0]
   const label = eliminated ? formatDiscordDisplayName(eliminated.displayName) : `<@${result.eliminatedUserId}>`
-  if (result.role === 'undercover') {
-    await channel.send(panel(
-      `## 🏁 投票结果\n\n` +
-      `**${label}** 遗憾出局。\n\n卧底被淘汰，平民胜利。`,
-    ))
-    return
-  }
-
   await channel.send(panel(
     `## 🗳️ 投票结果\n\n` +
     `**${label}** 遗憾出局。`,
