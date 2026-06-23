@@ -59,6 +59,9 @@ const WORD_SOURCE_OPTION = '词汇来源'
 const ALLOW_LYING_OPTION = '可否撒谎'
 const DISCUSSION_MINUTES_OPTION = '讨论时间'
 const UNDERCOVER_COUNT_OPTION = '卧底数量'
+const DESIGNATE_UNDERCOVER_OPTION = '指定卧底'
+const DESIGNATE_BY_SPEECH_ORDER = 'speech_order'
+const DESIGNATE_BY_PLAYERS = 'players'
 const CUSTOM_WORD_SOURCE: UndercoverWordSource = 'custom'
 const RANDOM_WORD_SOURCE: UndercoverWordSource = 'random'
 const UNDERCOVER_START_BUTTON_ID = 'undercover_official_start'
@@ -66,6 +69,10 @@ const UNDERCOVER_SPEECH_BUTTON_ID = 'undercover_speech_submit'
 const UNDERCOVER_SKIP_SPEECH_BUTTON_ID = 'undercover_speech_skip'
 const UNDERCOVER_SPEECH_MODAL_ID = 'undercover_speech_modal'
 const UNDERCOVER_SPEECH_INPUT_ID = 'speech_content'
+const UNDERCOVER_DESIGNATE_SPEECH_MODAL_ID = 'undercover_designate_speech'
+const UNDERCOVER_DESIGNATE_SPEECH_INPUT_ID = 'undercover_designate_speech_numbers'
+const UNDERCOVER_DESIGNATE_PLAYER_SELECT_PREFIX = 'undercover_designate_player_select_'
+const UNDERCOVER_DESIGNATE_PLAYER_CONFIRM_PREFIX = 'undercover_designate_player_confirm_'
 const UNDERCOVER_VOTE_BUTTON_ID = 'undercover_vote_open'
 const UNDERCOVER_VOTE_SELECT_ID = 'undercover_vote_select'
 const UNDERCOVER_HISTORY_BUTTON_ID = 'undercover_history_open'
@@ -80,9 +87,17 @@ type UndercoverRuntimeContext = UndercoverInteraction | {
   channelId: string
   guild?: any
 }
+type PendingDesignatePlayers = {
+  channelId: string
+  hostId: string
+  undercoverCount: number
+  playerOptions: Array<{ label: string; value: string }>
+  selections: Array<string | undefined>
+}
 
 const VOTE_ENDING_SOON_MS = 30_000
 const voteTimers = new Map<string, Array<ReturnType<typeof setTimeout>>>()
+const pendingDesignatePlayers = new Map<string, PendingDesignatePlayers>()
 
 export const data = new SlashCommandBuilder()
   .setName('卧底')
@@ -113,6 +128,15 @@ export const data = new SlashCommandBuilder()
       .setDescription('可选卧底数量，不填默认 1；按钮正式开始固定为 1')
       .setRequired(false)
       .setMinValue(1)
+    )
+    .addStringOption(option => option
+      .setName(DESIGNATE_UNDERCOVER_OPTION)
+      .setDescription('可选指定卧底方式，不填默认随机')
+      .setRequired(false)
+      .addChoices(
+        { name: '指定发言顺序', value: DESIGNATE_BY_SPEECH_ORDER },
+        { name: '指定特定参与者', value: DESIGNATE_BY_PLAYERS },
+      )
     )
   )
   .addSubcommand(sub => sub
@@ -350,8 +374,156 @@ async function handleOfficialStart(interaction: ChatInputCommandInteraction) {
   }
 
   const undercoverCount = interaction.options.getInteger(UNDERCOVER_COUNT_OPTION) ?? 1
+  const designateMode = interaction.options.getString?.(DESIGNATE_UNDERCOVER_OPTION) ?? null
+  if (designateMode === DESIGNATE_BY_SPEECH_ORDER) {
+    await showDesignateSpeechOrderModal(interaction, undercoverCount)
+    return
+  }
+  if (designateMode === DESIGNATE_BY_PLAYERS) {
+    await showDesignatePlayersPanel(interaction, game, undercoverCount)
+    return
+  }
+
   await interaction.deferReply({ ephemeral: true })
   await dealAndNotify(interaction, undercoverCount)
+}
+
+async function showDesignateSpeechOrderModal(
+  interaction: ChatInputCommandInteraction,
+  undercoverCount: number,
+) {
+  const modal = new ModalBuilder()
+    .setCustomId(`${UNDERCOVER_DESIGNATE_SPEECH_MODAL_ID}_${interaction.channelId}_${interaction.user.id}_${undercoverCount}`)
+    .setTitle('指定卧底发言顺序')
+  const input = new TextInputBuilder()
+    .setCustomId(UNDERCOVER_DESIGNATE_SPEECH_INPUT_ID)
+    .setLabel('填写卧底所在发言序号')
+    .setPlaceholder('例如：2,3 或 2 3 或 2，3')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+  modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input))
+  await interaction.showModal(modal)
+}
+
+function parseDesignateSpeechNumbers(input: string): number[] {
+  return input
+    .split(/[,\s，]+/u)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .map(item => Number(item))
+}
+
+async function handleDesignateSpeechOrderModal(interaction: ModalSubmitInteraction) {
+  const suffix = interaction.customId.slice(`${UNDERCOVER_DESIGNATE_SPEECH_MODAL_ID}_`.length)
+  const parts = suffix.split('_')
+  const undercoverCount = Number(parts.at(-1))
+  const hostId = parts.at(-2)
+  if (interaction.user.id !== hostId) {
+    await interaction.reply({ content: '❌ 只有本局主持人可以指定卧底。', ephemeral: true })
+    return
+  }
+
+  await interaction.deferReply({ ephemeral: true })
+  const numbers = parseDesignateSpeechNumbers(
+    interaction.fields.getTextInputValue(UNDERCOVER_DESIGNATE_SPEECH_INPUT_ID),
+  )
+  await dealAndNotify(interaction, undercoverCount, { undercoverSpeechNumbers: numbers })
+}
+
+function designatePlayersKey(channelId: string, hostId: string): string {
+  return `${channelId}:${hostId}`
+}
+
+function designatePlayerSelectId(channelId: string, hostId: string, slotIndex: number): string {
+  return `${UNDERCOVER_DESIGNATE_PLAYER_SELECT_PREFIX}${channelId}_${hostId}_${slotIndex}`
+}
+
+function designatePlayerConfirmId(channelId: string, hostId: string): string {
+  return `${UNDERCOVER_DESIGNATE_PLAYER_CONFIRM_PREFIX}${channelId}_${hostId}`
+}
+
+function parseDesignatePlayerCustomId(customId: string, prefix: string) {
+  const suffix = customId.slice(prefix.length)
+  const parts = suffix.split('_')
+  const slotText = prefix === UNDERCOVER_DESIGNATE_PLAYER_SELECT_PREFIX ? parts.pop() : undefined
+  const hostId = parts.pop()
+  const channelId = parts.join('_')
+  return {
+    channelId,
+    hostId,
+    slotIndex: slotText === undefined ? undefined : Number(slotText),
+  }
+}
+
+function designatePlayersRows(pending: PendingDesignatePlayers) {
+  const rows: any[] = pending.selections.map((selectedUserId, index) => ({
+    type: 1,
+    components: [
+      {
+        type: 3,
+        custom_id: designatePlayerSelectId(pending.channelId, pending.hostId, index),
+        placeholder: `选择卧底${index + 1}`,
+        min_values: 1,
+        max_values: 1,
+        options: pending.playerOptions.map(option => ({
+          ...option,
+          default: option.value === selectedUserId,
+        })),
+      },
+    ],
+  }))
+  rows.push({
+    type: 1,
+    components: [
+      {
+        type: 2,
+        style: 1,
+        label: '确认',
+        custom_id: designatePlayerConfirmId(pending.channelId, pending.hostId),
+      },
+    ],
+  })
+  return rows
+}
+
+function designatePlayersPayload(pending: PendingDesignatePlayers) {
+  return panelWithRows(
+    `## 🎭 指定卧底\n\n请为每个卧底选择一名参与者，全部选完后点击确认。`,
+    designatePlayersRows(pending),
+  )
+}
+
+async function showDesignatePlayersPanel(
+  interaction: ChatInputCommandInteraction,
+  game: UndercoverGame,
+  undercoverCount: number,
+) {
+  if (undercoverCount > 4) {
+    await interaction.reply({
+      content: '❌ 指定特定参与者最多支持 4 个卧底。更多卧底请使用“指定发言顺序”。',
+      ephemeral: true,
+    })
+    return
+  }
+
+  if (game.players.length > 25) {
+    await interaction.reply({
+      content: '❌ 参与者超过 25 人时无法使用下拉框指定，请使用“指定发言顺序”。',
+      ephemeral: true,
+    })
+    return
+  }
+
+  const displayPlayers = await getDisplayNumberedPlayers(interaction, game)
+  const pending: PendingDesignatePlayers = {
+    channelId: interaction.channelId,
+    hostId: interaction.user.id,
+    undercoverCount,
+    playerOptions: formatUndercoverVoteOptions(displayPlayers),
+    selections: Array.from({ length: undercoverCount }),
+  }
+  pendingDesignatePlayers.set(designatePlayersKey(interaction.channelId, interaction.user.id), pending)
+  await interaction.reply({ ...designatePlayersPayload(pending), ephemeral: true })
 }
 
 async function handleStartSpeech(interaction: ChatInputCommandInteraction) {
@@ -1043,7 +1215,14 @@ async function formatVoteHistoryResult(
   return `\n\n**结果：**${label} 出局`
 }
 
-async function dealAndNotify(interaction: UndercoverInteraction, undercoverCount: number) {
+async function dealAndNotify(
+  interaction: UndercoverInteraction,
+  undercoverCount: number,
+  designateOptions: {
+    undercoverUserIds?: string[]
+    undercoverSpeechNumbers?: number[]
+  } = {},
+) {
   const guild = interaction.guild
   const channel = interaction.channel
   const channelId = interaction.channelId
@@ -1055,7 +1234,7 @@ async function dealAndNotify(interaction: UndercoverInteraction, undercoverCount
 
   let result
   try {
-    result = await UndercoverEngine.dealWords(channelId, { undercoverCount })
+    result = await UndercoverEngine.dealWords(channelId, { undercoverCount, ...designateOptions })
   } catch (error: any) {
     await interaction.editReply(`❌ ${error.message}`)
     return
@@ -1186,6 +1365,11 @@ async function sendWordDm(
 }
 
 export async function handleUndercoverButton(interaction: ButtonInteraction) {
+  if (interaction.customId.startsWith(UNDERCOVER_DESIGNATE_PLAYER_CONFIRM_PREFIX)) {
+    await handleDesignatePlayerConfirmButton(interaction)
+    return
+  }
+
   if (interaction.customId === UNDERCOVER_START_BUTTON_ID) {
     await handleOfficialStartButton(interaction)
     return
@@ -1234,6 +1418,11 @@ export async function handleUndercoverButton(interaction: ButtonInteraction) {
 }
 
 export async function handleUndercoverSelect(interaction: StringSelectMenuInteraction) {
+  if (interaction.customId.startsWith(UNDERCOVER_DESIGNATE_PLAYER_SELECT_PREFIX)) {
+    await handleDesignatePlayerSelect(interaction)
+    return
+  }
+
   if (interaction.customId !== UNDERCOVER_VOTE_SELECT_ID) return
 
   const channelId = interaction.channelId
@@ -1258,7 +1447,66 @@ export async function handleUndercoverSelect(interaction: StringSelectMenuIntera
   await interaction.update({ content: `✅ 已投给 ${targetLabel}。再次点击投票可以改票。`, components: [] })
 }
 
+async function handleDesignatePlayerSelect(interaction: StringSelectMenuInteraction) {
+  const parsed = parseDesignatePlayerCustomId(interaction.customId, UNDERCOVER_DESIGNATE_PLAYER_SELECT_PREFIX)
+  const { channelId, hostId, slotIndex } = parsed
+  if (!channelId || !hostId || slotIndex === undefined || !Number.isInteger(slotIndex)) {
+    await interaction.update({ content: '❌ 指定流程已失效，请重新执行 `/卧底 正式开始`。', components: [] })
+    return
+  }
+  if (interaction.user.id !== hostId) {
+    await interaction.update({ content: '❌ 只有本局主持人可以选择卧底。', components: [] })
+    return
+  }
+
+  const pending = pendingDesignatePlayers.get(designatePlayersKey(channelId, hostId))
+  if (!pending || slotIndex < 0 || slotIndex >= pending.undercoverCount) {
+    await interaction.update({ content: '❌ 指定流程已过期，请重新执行 `/卧底 正式开始`。', components: [] })
+    return
+  }
+
+  pending.selections[slotIndex] = interaction.values[0]
+  await interaction.update(designatePlayersPayload(pending))
+}
+
+async function handleDesignatePlayerConfirmButton(interaction: ButtonInteraction) {
+  const { channelId, hostId } = parseDesignatePlayerCustomId(
+    interaction.customId,
+    UNDERCOVER_DESIGNATE_PLAYER_CONFIRM_PREFIX,
+  )
+  if (!channelId || !hostId) {
+    await interaction.reply({ content: '❌ 指定流程已失效，请重新执行 `/卧底 正式开始`。', ephemeral: true })
+    return
+  }
+  if (interaction.user.id !== hostId) {
+    await interaction.reply({ content: '❌ 只有本局主持人可以确认指定卧底。', ephemeral: true })
+    return
+  }
+
+  const key = designatePlayersKey(channelId, hostId)
+  const pending = pendingDesignatePlayers.get(key)
+  if (!pending) {
+    await interaction.reply({ content: '❌ 指定流程已过期，请重新执行 `/卧底 正式开始`。', ephemeral: true })
+    return
+  }
+
+  const selectedUserIds = pending.selections.filter((userId): userId is string => Boolean(userId))
+  if (selectedUserIds.length !== pending.undercoverCount) {
+    await interaction.reply({ content: '❌ 请先为每个卧底选择参与者。', ephemeral: true })
+    return
+  }
+
+  pendingDesignatePlayers.delete(key)
+  await interaction.deferReply({ ephemeral: true })
+  await dealAndNotify(interaction, pending.undercoverCount, { undercoverUserIds: selectedUserIds })
+}
+
 export async function handleUndercoverModal(interaction: ModalSubmitInteraction) {
+  if (interaction.customId.startsWith(UNDERCOVER_DESIGNATE_SPEECH_MODAL_ID)) {
+    await handleDesignateSpeechOrderModal(interaction)
+    return
+  }
+
   if (!interaction.customId.startsWith(UNDERCOVER_SPEECH_MODAL_ID)) return
 
   await interaction.deferReply({ ephemeral: true })

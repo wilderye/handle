@@ -4,6 +4,7 @@ import {
   execute as executeUndercoverCommand,
   handleUndercoverButton,
   handleUndercoverModal,
+  handleUndercoverSelect,
 } from './commands/undercover.js'
 import {
   UndercoverEngine,
@@ -164,6 +165,121 @@ assert.deepEqual(UndercoverEngine.getGame(multiDealChannelId)?.deal?.undercoverU
 await UndercoverEngine.endGame(multiDealChannelId)
 console.log('✅ 正式开始支持主持人指定多个卧底，并只限制卧底数量小于参与者数量')
 
+const explicitUndercoverUsersChannelId = 'undercover-explicit-users-channel'
+await UndercoverEngine.startGame(explicitUndercoverUsersChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '西瓜',
+  undercoverWord: '冬瓜',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(explicitUndercoverUsersChannelId, 'x1')
+await UndercoverEngine.addPlayer(explicitUndercoverUsersChannelId, 'x2')
+await UndercoverEngine.addPlayer(explicitUndercoverUsersChannelId, 'x3')
+await UndercoverEngine.addPlayer(explicitUndercoverUsersChannelId, 'x4')
+const explicitUndercoverUsersDeal = await UndercoverEngine.dealWords(explicitUndercoverUsersChannelId, {
+  undercoverCount: 2,
+  undercoverUserIds: ['x3', 'x4'],
+  rng: sequenceRng([0, 0, 0, 0, 0]),
+} as any)
+assert.deepEqual(explicitUndercoverUsersDeal.undercoverUserIds, ['x3', 'x4'])
+assert.deepEqual(
+  explicitUndercoverUsersDeal.assignments
+    .filter(assignment => assignment.role === 'undercover')
+    .map(assignment => assignment.userId),
+  ['x3', 'x4'],
+)
+await UndercoverEngine.endGame(explicitUndercoverUsersChannelId)
+console.log('✅ 正式开始支持主持人指定特定参与者为卧底')
+
+const speechNumberUndercoverChannelId = 'undercover-speech-number-channel'
+await UndercoverEngine.startGame(speechNumberUndercoverChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '月亮',
+  undercoverWord: '太阳',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(speechNumberUndercoverChannelId, 'sn1')
+await UndercoverEngine.addPlayer(speechNumberUndercoverChannelId, 'sn2')
+await UndercoverEngine.addPlayer(speechNumberUndercoverChannelId, 'sn3')
+await UndercoverEngine.addPlayer(speechNumberUndercoverChannelId, 'sn4')
+const speechNumberDeal = await UndercoverEngine.dealWords(speechNumberUndercoverChannelId, {
+  undercoverCount: 2,
+  undercoverSpeechNumbers: [2, 4],
+  rng: sequenceRng([0, 0, 0, 0, 0]),
+} as any)
+assert.deepEqual(
+  UndercoverEngine.getGame(speechNumberUndercoverChannelId)?.fixedPlayers?.map(player => player.userId),
+  ['sn2', 'sn3', 'sn4', 'sn1'],
+)
+assert.deepEqual(speechNumberDeal.undercoverUserIds, ['sn3', 'sn1'])
+await UndercoverEngine.endGame(speechNumberUndercoverChannelId)
+console.log('✅ 正式开始支持按最终发言顺序序号指定卧底')
+
+const invalidDesignateChannelId = 'undercover-invalid-designate-channel'
+await UndercoverEngine.startGame(invalidDesignateChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '雨伞',
+  undercoverWord: '阳伞',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(invalidDesignateChannelId, 'iv1')
+await UndercoverEngine.addPlayer(invalidDesignateChannelId, 'iv2')
+await UndercoverEngine.addPlayer(invalidDesignateChannelId, 'iv3')
+await UndercoverEngine.addPlayer(invalidDesignateChannelId, 'iv4')
+await assert.rejects(
+  () => UndercoverEngine.dealWords(invalidDesignateChannelId, {
+    undercoverCount: 2,
+    undercoverUserIds: ['iv1', 'iv1'],
+  }),
+  /不能重复指定卧底/,
+)
+await assert.rejects(
+  () => UndercoverEngine.dealWords(invalidDesignateChannelId, {
+    undercoverCount: 2,
+    undercoverUserIds: ['iv1'],
+  }),
+  /指定卧底数量必须等于卧底数量/,
+)
+await assert.rejects(
+  () => UndercoverEngine.dealWords(invalidDesignateChannelId, {
+    undercoverCount: 2,
+    undercoverUserIds: ['iv1', 'missing-player'],
+  }),
+  /指定卧底必须是当前参与者/,
+)
+await assert.rejects(
+  () => UndercoverEngine.dealWords(invalidDesignateChannelId, {
+    undercoverCount: 2,
+    undercoverUserIds: ['iv1', 'iv2'],
+    undercoverSpeechNumbers: [1, 2],
+  }),
+  /不能同时使用两种指定卧底方式/,
+)
+await assert.rejects(
+  () => UndercoverEngine.dealWords(invalidDesignateChannelId, {
+    undercoverCount: 2,
+    undercoverSpeechNumbers: [2, 2],
+  }),
+  /不能重复指定卧底/,
+)
+await assert.rejects(
+  () => UndercoverEngine.dealWords(invalidDesignateChannelId, {
+    undercoverCount: 2,
+    undercoverSpeechNumbers: [0, 2],
+  }),
+  /发言序号必须是正整数/,
+)
+await assert.rejects(
+  () => UndercoverEngine.dealWords(invalidDesignateChannelId, {
+    undercoverCount: 2,
+    undercoverSpeechNumbers: [2, 5],
+  }),
+  /发言序号不能超过参与人数/,
+)
+assert.equal(UndercoverEngine.getGame(invalidDesignateChannelId)?.dealtAt, undefined)
+await UndercoverEngine.endGame(invalidDesignateChannelId)
+console.log('✅ 指定卧底校验会拒绝重复、数量不匹配、越界和非参与者')
+
 const commandJson = undercoverCommandData.toJSON()
 const commandNames = commandJson.options?.map((option: any) => option.name)
 assert.deepEqual(
@@ -175,7 +291,247 @@ assert.equal(
   officialStartCommand.options?.some((option: any) => option.name === '卧底数量' && option.min_value === 1),
   true,
 )
-console.log('✅ 谁是卧底保留原命令并注册开始发言、投票和卧底数量选项')
+const designateUndercoverOption = officialStartCommand.options?.find((option: any) => option.name === '指定卧底') as any
+assert.deepEqual(
+  designateUndercoverOption?.choices?.map((choice: any) => ({ name: choice.name, value: choice.value })),
+  [
+    { name: '指定发言顺序', value: 'speech_order' },
+    { name: '指定特定参与者', value: 'players' },
+  ],
+)
+console.log('✅ 谁是卧底保留原命令并注册开始发言、投票、卧底数量和指定卧底选项')
+
+const designateSpeechCommandChannelId = 'undercover-designate-speech-command-channel'
+await UndercoverEngine.startGame(designateSpeechCommandChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '米饭',
+  undercoverWord: '面条',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(designateSpeechCommandChannelId, 'ds1')
+await UndercoverEngine.addPlayer(designateSpeechCommandChannelId, 'ds2')
+await UndercoverEngine.addPlayer(designateSpeechCommandChannelId, 'ds3')
+await UndercoverEngine.addPlayer(designateSpeechCommandChannelId, 'ds4')
+let designateSpeechModal: any
+let designateSpeechDeferredBeforeModal = false
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `序号玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({
+        displayName: `序号玩家${userId}`,
+        username: userId,
+        send: async () => undefined,
+      }),
+    },
+  },
+  channelId: designateSpeechCommandChannelId,
+  channel: {
+    send: async () => undefined,
+  },
+  user: { id: hostId },
+  options: {
+    getSubcommand: () => '正式开始',
+    getInteger: (name: string) => name === '卧底数量' ? 2 : null,
+    getString: (name: string) => name === '指定卧底' ? 'speech_order' : null,
+  },
+  showModal: async (modal: any) => {
+    designateSpeechModal = modal
+  },
+  deferReply: async () => {
+    designateSpeechDeferredBeforeModal = true
+  },
+  editReply: async () => undefined,
+} as any)
+assert.equal(designateSpeechDeferredBeforeModal, false)
+const designateSpeechModalJson = designateSpeechModal?.toJSON()
+assert.equal(designateSpeechModalJson?.title, '指定卧底发言顺序')
+const designateSpeechInput = designateSpeechModalJson?.components?.[0]?.components?.[0]
+assert.equal(designateSpeechInput?.custom_id, 'undercover_designate_speech_numbers')
+assert.equal(designateSpeechInput?.required, true)
+
+let designateSpeechPublicPanel: any
+let designateSpeechSecretReply: any
+const designateSpeechOriginalRandom = Math.random
+Math.random = sequenceRng([0, 0, 0])
+await handleUndercoverModal({
+  customId: designateSpeechModalJson.custom_id,
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `序号玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({
+        displayName: `序号玩家${userId}`,
+        username: userId,
+        send: async () => undefined,
+      }),
+    },
+  },
+  channelId: designateSpeechCommandChannelId,
+  channel: {
+    send: async (payload: any) => {
+      designateSpeechPublicPanel = payload
+    },
+  },
+  user: { id: hostId },
+  fields: {
+    getTextInputValue: (inputId: string) => {
+      assert.equal(inputId, 'undercover_designate_speech_numbers')
+      return '2，4'
+    },
+  },
+  deferReply: async (payload: any) => {
+    assert.equal(payload.ephemeral, true)
+  },
+  editReply: async (payload: any) => {
+    designateSpeechSecretReply = payload
+  },
+} as any)
+Math.random = designateSpeechOriginalRandom
+assert.equal(getPanelText(designateSpeechPublicPanel).includes('**1.** 序号玩家ds2\n**2.** 序号玩家ds3\n**3.** 序号玩家ds4\n**4.** 序号玩家ds1'), true)
+assert.equal(getPanelText(designateSpeechSecretReply).includes('**卧底：**序号玩家ds3、序号玩家ds1'), true)
+await UndercoverEngine.endGame(designateSpeechCommandChannelId)
+console.log('✅ 指定发言顺序会先弹输入框，并支持中文逗号按最终发言顺序指定卧底')
+
+const designatePlayersCommandChannelId = 'undercover-designate-players-command-channel'
+await UndercoverEngine.startGame(designatePlayersCommandChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '青菜',
+  undercoverWord: '白菜',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(designatePlayersCommandChannelId, 'dp1')
+await UndercoverEngine.addPlayer(designatePlayersCommandChannelId, 'dp2')
+await UndercoverEngine.addPlayer(designatePlayersCommandChannelId, 'dp3')
+await UndercoverEngine.addPlayer(designatePlayersCommandChannelId, 'dp4')
+let designatePlayersReply: any
+let designatePlayersDeferredBeforeSelect = false
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `选择玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({
+        displayName: `选择玩家${userId}`,
+        username: userId,
+        send: async () => undefined,
+      }),
+    },
+  },
+  channelId: designatePlayersCommandChannelId,
+  channel: {
+    send: async () => undefined,
+  },
+  user: { id: hostId },
+  options: {
+    getSubcommand: () => '正式开始',
+    getInteger: (name: string) => name === '卧底数量' ? 2 : null,
+    getString: (name: string) => name === '指定卧底' ? 'players' : null,
+  },
+  reply: async (payload: any) => {
+    designatePlayersReply = payload
+  },
+  deferReply: async () => {
+    designatePlayersDeferredBeforeSelect = true
+  },
+  editReply: async () => undefined,
+} as any)
+assert.equal(designatePlayersDeferredBeforeSelect, false)
+assert.equal(designatePlayersReply.ephemeral, true)
+assert.equal(getPanelText(designatePlayersReply).includes('指定卧底'), true)
+assert.equal(UndercoverEngine.getGame(designatePlayersCommandChannelId)?.dealtAt, undefined)
+const firstDesignatePlayerSelect = designatePlayersReply.components?.[1]?.components?.[0]
+const secondDesignatePlayerSelect = designatePlayersReply.components?.[2]?.components?.[0]
+const designatePlayersConfirmButton = designatePlayersReply.components?.[3]?.components?.[0]
+assert.equal(firstDesignatePlayerSelect?.placeholder, '选择卧底1')
+assert.equal(secondDesignatePlayerSelect?.placeholder, '选择卧底2')
+assert.deepEqual(
+  firstDesignatePlayerSelect?.options?.map((option: any) => option.value),
+  ['dp1', 'dp2', 'dp3', 'dp4'],
+)
+assert.equal(designatePlayersConfirmButton?.label, '确认')
+
+await handleUndercoverSelect({
+  customId: firstDesignatePlayerSelect.custom_id,
+  channelId: designatePlayersCommandChannelId,
+  user: { id: hostId },
+  values: ['dp3'],
+  update: async () => undefined,
+} as any)
+await handleUndercoverSelect({
+  customId: secondDesignatePlayerSelect.custom_id,
+  channelId: designatePlayersCommandChannelId,
+  user: { id: hostId },
+  values: ['dp4'],
+  update: async () => undefined,
+} as any)
+assert.equal(UndercoverEngine.getGame(designatePlayersCommandChannelId)?.dealtAt, undefined)
+
+let designatePlayersPublicPanel: any
+let designatePlayersSecretReply: any
+let designatePlayersConfirmDeferred = false
+const designatePlayersOriginalRandom = Math.random
+Math.random = sequenceRng([0, 0, 0])
+await handleUndercoverButton({
+  customId: designatePlayersConfirmButton.custom_id,
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `选择玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({
+        displayName: `选择玩家${userId}`,
+        username: userId,
+        send: async () => undefined,
+      }),
+    },
+  },
+  channelId: designatePlayersCommandChannelId,
+  channel: {
+    send: async (payload: any) => {
+      designatePlayersPublicPanel = payload
+    },
+  },
+  user: { id: hostId },
+  deferReply: async (payload: any) => {
+    assert.equal(payload.ephemeral, true)
+    designatePlayersConfirmDeferred = true
+  },
+  editReply: async (payload: any) => {
+    designatePlayersSecretReply = payload
+  },
+} as any)
+Math.random = designatePlayersOriginalRandom
+assert.equal(designatePlayersConfirmDeferred, true)
+assert.equal(getPanelText(designatePlayersPublicPanel).includes('**发言顺序：**'), true)
+assert.equal(getPanelText(designatePlayersSecretReply).includes('**卧底：**选择玩家dp3、选择玩家dp4'), true)
+await UndercoverEngine.endGame(designatePlayersCommandChannelId)
+console.log('✅ 指定特定参与者会先显示下拉确认面板，确认前不发词，确认后精准指定卧底')
+
+let expiredDesignateReply: any
+await handleUndercoverButton({
+  customId: `undercover_designate_player_confirm_expired-channel_${hostId}`,
+  channelId: 'expired-channel',
+  user: { id: hostId },
+  reply: async (payload: any) => {
+    expiredDesignateReply = payload
+  },
+} as any)
+assert.equal(expiredDesignateReply.content.includes('指定流程已过期'), true)
+assert.equal(expiredDesignateReply.ephemeral, true)
+console.log('✅ 指定特定参与者确认状态过期时会提示重新执行正式开始')
 
 const emptyVoteHistoryChannelId = 'undercover-empty-vote-history-channel'
 await UndercoverEngine.startGame(emptyVoteHistoryChannelId, hostId, {

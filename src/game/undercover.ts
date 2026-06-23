@@ -122,6 +122,8 @@ export type UndercoverCloseVoteResult =
 
 interface DealWordsOptions {
   undercoverCount?: number
+  undercoverUserIds?: string[]
+  undercoverSpeechNumbers?: number[]
   rng?: () => number
 }
 
@@ -1078,15 +1080,56 @@ export class UndercoverEngine {
         throw new Error(`卧底数量必须小于参与者数量。当前玩家数：${game.players.length}`)
       }
 
-      const availableUserIds = game.players.map(player => player.userId)
-      const undercoverUserIds: string[] = []
-      for (let count = 0; count < undercoverCount; count += 1) {
-        const undercoverIndex = Math.min(
-          availableUserIds.length - 1,
-          Math.floor(rng() * availableUserIds.length),
-        )
-        const [undercoverUserId] = availableUserIds.splice(undercoverIndex, 1)
-        undercoverUserIds.push(undercoverUserId)
+      const playerUserIds = game.players.map(player => player.userId)
+      const playerUserIdSet = new Set(playerUserIds)
+      const specifiedUserIds = normalizedOptions.undercoverUserIds
+      const specifiedSpeechNumbers = normalizedOptions.undercoverSpeechNumbers
+      if (specifiedUserIds && specifiedSpeechNumbers) {
+        throw new Error('不能同时使用两种指定卧底方式。')
+      }
+      if (specifiedUserIds) {
+        if (specifiedUserIds.length !== undercoverCount) {
+          throw new Error('指定卧底数量必须等于卧底数量。')
+        }
+        if (new Set(specifiedUserIds).size !== specifiedUserIds.length) {
+          throw new Error('不能重复指定卧底。')
+        }
+        if (specifiedUserIds.some(userId => !playerUserIdSet.has(userId))) {
+          throw new Error('指定卧底必须是当前参与者。')
+        }
+      }
+      if (specifiedSpeechNumbers) {
+        if (specifiedSpeechNumbers.length !== undercoverCount) {
+          throw new Error('指定卧底数量必须等于卧底数量。')
+        }
+        if (specifiedSpeechNumbers.some(number => !Number.isInteger(number) || number < 1)) {
+          throw new Error('发言序号必须是正整数。')
+        }
+        if (specifiedSpeechNumbers.some(number => number > game.players.length)) {
+          throw new Error(`发言序号不能超过参与人数。当前玩家数：${game.players.length}`)
+        }
+        if (new Set(specifiedSpeechNumbers).size !== specifiedSpeechNumbers.length) {
+          throw new Error('不能重复指定卧底。')
+        }
+      }
+      const speechNumberFixedOrder = normalizedOptions.undercoverSpeechNumbers
+        ? shuffleUserIds(playerUserIds, rng)
+        : undefined
+      const undercoverUserIds = normalizedOptions.undercoverUserIds
+        ? [...normalizedOptions.undercoverUserIds]
+        : normalizedOptions.undercoverSpeechNumbers
+          ? normalizedOptions.undercoverSpeechNumbers.map(number => speechNumberFixedOrder![number - 1])
+          : []
+      if (undercoverUserIds.length === 0) {
+        const availableUserIds = [...playerUserIds]
+        for (let count = 0; count < undercoverCount; count += 1) {
+          const undercoverIndex = Math.min(
+            availableUserIds.length - 1,
+            Math.floor(rng() * availableUserIds.length),
+          )
+          const [undercoverUserId] = availableUserIds.splice(undercoverIndex, 1)
+          undercoverUserIds.push(undercoverUserId)
+        }
       }
       const undercoverUserIdSet = new Set(undercoverUserIds)
 
@@ -1111,7 +1154,7 @@ export class UndercoverEngine {
       const previousEliminatedUserIds = game.eliminatedUserIds ? [...game.eliminatedUserIds] : undefined
       game.dealtAt = Date.now()
       game.deal = result
-      const fixedOrder = shuffleUserIds(game.players.map(player => player.userId), rng)
+      const fixedOrder = speechNumberFixedOrder ?? shuffleUserIds(playerUserIds, rng)
       const playerById = new Map(game.players.map(player => [player.userId, player]))
       game.fixedPlayers = fixedOrder.map((userId, index) => ({
         ...playerById.get(userId)!,
