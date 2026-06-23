@@ -56,6 +56,15 @@ export interface UndercoverCurrentVote {
   endsAt?: number
 }
 
+export interface UndercoverCompletedVote {
+  voteNumber: number
+  candidateUserIds: string[]
+  votes: Record<string, string>
+  result: UndercoverCloseVoteResult
+  startedAt: number
+  completedAt: number
+}
+
 export interface UndercoverGame {
   channelId: string
   hostId: string
@@ -73,6 +82,7 @@ export interface UndercoverGame {
   speechRounds?: UndercoverSpeechRound[]
   currentSpeech?: UndercoverCurrentSpeech
   currentVote?: UndercoverCurrentVote
+  voteRounds?: UndercoverCompletedVote[]
   createdAt: number
 }
 
@@ -170,6 +180,7 @@ class PGUndercoverStore implements UndercoverStore {
         speech_rounds JSONB NOT NULL DEFAULT '[]'::jsonb,
         current_speech JSONB,
         current_vote JSONB,
+        vote_rounds JSONB NOT NULL DEFAULT '[]'::jsonb,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `)
@@ -180,7 +191,8 @@ class PGUndercoverStore implements UndercoverStore {
       ADD COLUMN IF NOT EXISTS eliminated_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
       ADD COLUMN IF NOT EXISTS speech_rounds JSONB NOT NULL DEFAULT '[]'::jsonb,
       ADD COLUMN IF NOT EXISTS current_speech JSONB,
-      ADD COLUMN IF NOT EXISTS current_vote JSONB;
+      ADD COLUMN IF NOT EXISTS current_vote JSONB,
+      ADD COLUMN IF NOT EXISTS vote_rounds JSONB NOT NULL DEFAULT '[]'::jsonb;
     `)
   }
 
@@ -203,6 +215,7 @@ class PGUndercoverStore implements UndercoverStore {
         speech_rounds,
         current_speech,
         current_vote,
+        vote_rounds,
         created_at
       FROM undercover_games
     `)
@@ -227,6 +240,7 @@ class PGUndercoverStore implements UndercoverStore {
         speechRounds: parseStoredSpeechRounds(row.speech_rounds),
         currentSpeech: parseStoredCurrentSpeech(row.current_speech),
         currentVote: parseStoredCurrentVote(row.current_vote),
+        voteRounds: parseStoredVoteRounds(row.vote_rounds),
         createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
       })
     })
@@ -251,9 +265,10 @@ class PGUndercoverStore implements UndercoverStore {
         speech_rounds,
         current_speech,
         current_vote,
+        vote_rounds,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18)
       ON CONFLICT (channel_id) DO UPDATE SET
         host_id = EXCLUDED.host_id,
         join_message_id = EXCLUDED.join_message_id,
@@ -270,6 +285,7 @@ class PGUndercoverStore implements UndercoverStore {
         speech_rounds = EXCLUDED.speech_rounds,
         current_speech = EXCLUDED.current_speech,
         current_vote = EXCLUDED.current_vote,
+        vote_rounds = EXCLUDED.vote_rounds,
         created_at = EXCLUDED.created_at`,
       [
         game.channelId,
@@ -288,6 +304,7 @@ class PGUndercoverStore implements UndercoverStore {
         JSON.stringify(game.speechRounds ?? []),
         game.currentSpeech ? JSON.stringify(game.currentSpeech) : null,
         game.currentVote ? JSON.stringify(game.currentVote) : null,
+        JSON.stringify(game.voteRounds ?? []),
         new Date(game.createdAt),
       ],
     )
@@ -357,6 +374,31 @@ async function withChannelWrite<T>(
   }
 }
 
+function cloneVoteResult(result: UndercoverCloseVoteResult): UndercoverCloseVoteResult {
+  if (result.type === 'tie') {
+    return {
+      type: 'tie',
+      tiedUserIds: [...result.tiedUserIds],
+      votes: { ...result.votes },
+    }
+  }
+
+  return {
+    type: 'eliminated',
+    eliminatedUserId: result.eliminatedUserId,
+    votes: { ...result.votes },
+  }
+}
+
+function cloneCompletedVote(round: UndercoverCompletedVote): UndercoverCompletedVote {
+  return {
+    ...round,
+    candidateUserIds: [...round.candidateUserIds],
+    votes: { ...round.votes },
+    result: cloneVoteResult(round.result),
+  }
+}
+
 function cloneGame(game: UndercoverGame): UndercoverGame {
   return {
     ...game,
@@ -382,6 +424,7 @@ function cloneGame(game: UndercoverGame): UndercoverGame {
           votes: { ...game.currentVote.votes },
         }
       : undefined,
+    voteRounds: game.voteRounds?.map(cloneCompletedVote),
     deal: game.deal
       ? {
           ...game.deal,
@@ -398,6 +441,7 @@ function normalizeGame(game: UndercoverGame): UndercoverGame {
   normalized.aliveUserIds ??= []
   normalized.eliminatedUserIds ??= []
   normalized.speechRounds ??= []
+  normalized.voteRounds ??= []
 
   if (normalized.dealtAt && normalized.fixedPlayers.length === 0) {
     normalized.fixedPlayers = normalized.players.map((player, index) => ({
@@ -516,6 +560,64 @@ function parseStoredCurrentVote(value: unknown): UndercoverCurrentVote | undefin
     startedAt: Number(raw.startedAt) || Date.now(),
     endsAt: Number(raw.endsAt) || undefined,
   }
+}
+
+function parseStoredVoteCounts(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object') return {}
+  const counts: Record<string, number> = {}
+  for (const [userId, count] of Object.entries(value)) {
+    const numericCount = Number(count)
+    if (Number.isFinite(numericCount)) counts[userId] = numericCount
+  }
+  return counts
+}
+
+function parseStoredVoteResult(value: unknown): UndercoverCloseVoteResult | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as any
+  if (raw.type === 'tie' && Array.isArray(raw.tiedUserIds)) {
+    return {
+      type: 'tie',
+      tiedUserIds: parseStoredStringArray(raw.tiedUserIds),
+      votes: parseStoredVoteCounts(raw.votes),
+    }
+  }
+  if (raw.type === 'eliminated' && typeof raw.eliminatedUserId === 'string') {
+    return {
+      type: 'eliminated',
+      eliminatedUserId: raw.eliminatedUserId,
+      votes: parseStoredVoteCounts(raw.votes),
+    }
+  }
+  return undefined
+}
+
+function parseStoredVoteRounds(value: unknown): UndercoverCompletedVote[] {
+  const raw = parseStoredJson<unknown[]>(value, [])
+  if (!Array.isArray(raw)) return []
+
+  return raw
+    .map((round: any, index) => {
+      const result = parseStoredVoteResult(round?.result)
+      if (!result) return undefined
+
+      const votes: Record<string, string> = {}
+      if (round.votes && typeof round.votes === 'object') {
+        for (const [voterId, targetId] of Object.entries(round.votes)) {
+          if (typeof targetId === 'string') votes[voterId] = targetId
+        }
+      }
+
+      return {
+        voteNumber: Number(round.voteNumber) || index + 1,
+        candidateUserIds: parseStoredStringArray(round.candidateUserIds),
+        votes,
+        result,
+        startedAt: Number(round.startedAt) || Date.now(),
+        completedAt: Number(round.completedAt) || Date.now(),
+      }
+    })
+    .filter((round): round is UndercoverCompletedVote => Boolean(round))
 }
 
 function parseStoredDeal(value: unknown): UndercoverDealResult | undefined {
@@ -852,6 +954,7 @@ export class UndercoverEngine {
         aliveUserIds: [],
         eliminatedUserIds: [],
         speechRounds: [],
+        voteRounds: [],
         createdAt: Date.now(),
       }
 
@@ -1355,6 +1458,7 @@ export class UndercoverEngine {
       const previousVote = cloneCurrentVote(vote)
       const previousAliveUserIds = [...getAliveUserIds(game)]
       const previousEliminatedUserIds = [...(game.eliminatedUserIds ?? [])]
+      const previousVoteRounds = game.voteRounds?.map(cloneCompletedVote) ?? []
       const counts = tallyVotes(vote.votes)
       const maxVotes = Math.max(0, ...Object.values(counts))
       const topUserIds = getAliveUserIds(game)
@@ -1378,6 +1482,17 @@ export class UndercoverEngine {
         }
       }
 
+      game.voteRounds = [
+        ...previousVoteRounds,
+        {
+          voteNumber: previousVoteRounds.length + 1,
+          candidateUserIds: previousAliveUserIds,
+          votes: { ...vote.votes },
+          result,
+          startedAt: vote.startedAt,
+          completedAt: Date.now(),
+        },
+      ]
       game.currentVote = undefined
       games.set(channelId, game)
       try {
@@ -1386,6 +1501,7 @@ export class UndercoverEngine {
         game.currentVote = previousVote
         game.aliveUserIds = previousAliveUserIds
         game.eliminatedUserIds = previousEliminatedUserIds
+        game.voteRounds = previousVoteRounds
         games.set(channelId, game)
         throw error
       }

@@ -30,6 +30,7 @@ import {
   UNDERCOVER_JOIN_EMOJI,
   UNDERCOVER_MIN_PLAYERS,
   type UndercoverAssignment,
+  type UndercoverCompletedVote,
   type UndercoverCurrentSpeech,
   type UndercoverGame,
   type UndercoverWordPair,
@@ -69,6 +70,7 @@ const UNDERCOVER_VOTE_BUTTON_ID = 'undercover_vote_open'
 const UNDERCOVER_VOTE_SELECT_ID = 'undercover_vote_select'
 const UNDERCOVER_HISTORY_BUTTON_ID = 'undercover_history_open'
 const UNDERCOVER_HISTORY_PAGE_PREFIX = 'undercover_history_page_'
+const UNDERCOVER_VOTE_HISTORY_PAGE_PREFIX = 'undercover_vote_history_page_'
 const UNDERCOVER_CLOSE_VOTE_BUTTON_ID = 'undercover_vote_close'
 
 type UndercoverInteraction = ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction
@@ -129,6 +131,10 @@ export const data = new SlashCommandBuilder()
     )
   )
   .addSubcommand(sub => sub
+    .setName('查看投票历史')
+    .setDescription('查看本局已结束投票历史，所有人可用')
+  )
+  .addSubcommand(sub => sub
     .setName('游戏通知')
     .setDescription('通知“小心她人！”身份组成员前来玩游戏！')
   )
@@ -170,6 +176,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   if (sub === '投票') {
     await handleStartVote(interaction)
+    return
+  }
+
+  if (sub === '查看投票历史') {
+    await handleVoteHistory(interaction)
     return
   }
 
@@ -453,6 +464,16 @@ async function handleStartVote(interaction: ChatInputCommandInteraction) {
   scheduleVoteTimers(interaction, interaction.channelId, voteGame.currentVote?.endsAt)
 }
 
+async function handleVoteHistory(interaction: ChatInputCommandInteraction) {
+  const game = UndercoverEngine.getGame(interaction.channelId)
+  if (!game) {
+    await interaction.reply({ content: '❌ 当前频道没有进行中的谁是卧底。', ephemeral: true })
+    return
+  }
+
+  await interaction.reply(await buildVoteHistoryPanel(interaction, game, 1))
+}
+
 async function handleRegistrationNotice(interaction: ChatInputCommandInteraction) {
   const game = UndercoverEngine.getGame(interaction.channelId)
   if (!game) {
@@ -584,6 +605,8 @@ async function handleHelp(interaction: ChatInputCommandInteraction) {
         `开启一轮面板化发言，当前轮已发言内容会显示在面板上。仅本局主持人可用。\n\n` +
         `\`/卧底 投票\`\n` +
         `开启或重新唤出投票面板；讨论时间到后自动结算，主持人也可以提前结束。仅本局主持人可用。\n\n` +
+        `\`/卧底 查看投票历史\`\n` +
+        `公开查看本局已结束投票历史，每页显示一次投票关系和得票计数。所有人可用。\n\n` +
         `\`/卧底 游戏通知\`\n` +
         `通知\`小心她人！\`身份组成员前来玩游戏！仅本局主持人可用。\n\n` +
         `\`/卧底 观众偷看\`\n` +
@@ -643,6 +666,28 @@ function historyPageRow(page: number, total: number, ownerId: string) {
         style: 2,
         label: '下一页',
         custom_id: `${UNDERCOVER_HISTORY_PAGE_PREFIX}${page + 1}_${ownerId}`,
+        disabled: page >= total,
+      },
+    ],
+  }
+}
+
+function voteHistoryPageRow(page: number, total: number) {
+  return {
+    type: 1,
+    components: [
+      {
+        type: 2,
+        style: 2,
+        label: '上一页',
+        custom_id: `${UNDERCOVER_VOTE_HISTORY_PAGE_PREFIX}${page - 1}`,
+        disabled: page <= 1,
+      },
+      {
+        type: 2,
+        style: 2,
+        label: '下一页',
+        custom_id: `${UNDERCOVER_VOTE_HISTORY_PAGE_PREFIX}${page + 1}`,
         disabled: page >= total,
       },
     ],
@@ -777,7 +822,11 @@ async function sendSpeechPanel(
   }
 }
 
-async function buildVotePanel(interaction: UndercoverRuntimeContext, game: UndercoverGame) {
+async function buildVotePanel(
+  interaction: UndercoverRuntimeContext,
+  game: UndercoverGame,
+  disabled = false,
+) {
   const aliveUserIds = game.aliveUserIds && game.aliveUserIds.length > 0
     ? game.aliveUserIds
     : game.players.map(player => player.userId)
@@ -792,7 +841,7 @@ async function buildVotePanel(interaction: UndercoverRuntimeContext, game: Under
     `**当前存活玩家：**\n${formatUndercoverPlayerVoteList(candidates, vote?.votes ?? {})}\n` +
     timeLine +
     `\n${formatUndercoverVoteStatus({ candidates, votes: vote?.votes ?? {} })}`,
-    [voteActionRow()],
+    [voteActionRow(disabled)],
   )
 }
 
@@ -900,7 +949,7 @@ async function sendVoteTimeUp(
   clearVoteTimers(channelId)
   const voteMessageId = game.currentVote.messageId
   const result = await UndercoverEngine.closeVote(channelId)
-  await editVoteMessageClosed(context, voteMessageId)
+  await editVoteMessageClosed(context, voteMessageId, game)
   await announceVoteResult(context, game, result.result)
 }
 
@@ -946,6 +995,52 @@ async function buildHistoryPanel(
     `## 📜 发言历史 (${safePage}/${total})\n\n${entries}`,
     rows,
   )
+}
+
+async function buildVoteHistoryPanel(
+  interaction: UndercoverRuntimeContext,
+  game: UndercoverGame,
+  page: number,
+) {
+  const rounds = [...(game.voteRounds ?? [])]
+  const total = Math.max(1, rounds.length)
+  const safePage = Math.max(1, Math.min(page, total))
+  const round = rounds[safePage - 1]
+
+  if (!round) {
+    return panelWithRows('## 🗳️ 投票历史\n\n暂无投票历史。')
+  }
+
+  const candidates = await getDisplayNumberedPlayers(interaction, game, round.candidateUserIds)
+  const resultLine = await formatVoteHistoryResult(interaction, game, round)
+  const rows = total > 1 ? [voteHistoryPageRow(safePage, total)] : []
+
+  return panelWithRows(
+    `## 🗳️ 投票历史 (${safePage}/${total})\n\n` +
+    `**第 ${round.voteNumber} 次投票**\n\n` +
+    `**投票给谁：**\n${formatUndercoverPlayerVoteList(candidates, round.votes)}\n\n` +
+    `${formatUndercoverVoteStatus({ candidates, votes: round.votes })}` +
+    resultLine,
+    rows,
+  )
+}
+
+async function formatVoteHistoryResult(
+  interaction: UndercoverRuntimeContext,
+  game: UndercoverGame,
+  round: UndercoverCompletedVote,
+): Promise<string> {
+  if (round.result.type === 'tie') {
+    const tiedPlayers = await getDisplayNumberedPlayers(interaction, game, round.result.tiedUserIds)
+    const tiedNames = tiedPlayers
+      .map(player => formatDiscordDisplayName(player.displayName))
+      .join('、')
+    return `\n\n**结果：**平票（${tiedNames || '无人'}）`
+  }
+
+  const eliminated = (await getDisplayNumberedPlayers(interaction, game, [round.result.eliminatedUserId]))[0]
+  const label = eliminated ? formatDiscordDisplayName(eliminated.displayName) : `<@${round.result.eliminatedUserId}>`
+  return `\n\n**结果：**${label} 出局`
 }
 
 async function dealAndNotify(interaction: UndercoverInteraction, undercoverCount: number) {
@@ -1124,6 +1219,12 @@ export async function handleUndercoverButton(interaction: ButtonInteraction) {
       return
     }
     await handleHistoryButton(interaction, Number(pageText) || 1, true)
+    return
+  }
+
+  if (interaction.customId.startsWith(UNDERCOVER_VOTE_HISTORY_PAGE_PREFIX)) {
+    const suffix = interaction.customId.slice(UNDERCOVER_VOTE_HISTORY_PAGE_PREFIX.length)
+    await handleVoteHistoryPageButton(interaction, Number(suffix) || 1)
     return
   }
 
@@ -1355,6 +1456,26 @@ async function handleHistoryButton(
   }
 }
 
+async function handleVoteHistoryPageButton(interaction: ButtonInteraction, page: number) {
+  await interaction.deferUpdate()
+
+  try {
+    const game = UndercoverEngine.getGame(interaction.channelId)
+    if (!game) {
+      await interaction.editReply({ content: '❌ 当前频道没有进行中的谁是卧底。', components: [] })
+      return
+    }
+
+    await interaction.editReply(await buildVoteHistoryPanel(interaction, game, page))
+  } catch (error) {
+    console.error('[Undercover] 查看投票历史失败:', error)
+    await interaction.editReply({
+      content: '❌ 查看投票历史失败，请稍后再试。',
+      components: [],
+    }).catch(() => undefined)
+  }
+}
+
 async function handleCloseVoteButton(interaction: ButtonInteraction) {
   const game = UndercoverEngine.getGame(interaction.channelId)
   if (!game) {
@@ -1376,7 +1497,7 @@ async function handleCloseVoteButton(interaction: ButtonInteraction) {
   clearVoteTimers(interaction.channelId)
   const voteMessageId = game.currentVote.messageId
   const result = await UndercoverEngine.closeVote(interaction.channelId)
-  await editVoteMessageClosed(interaction, voteMessageId)
+  await editVoteMessageClosed(interaction, voteMessageId, game)
   await announceVoteResult(interaction, game, result.result)
 }
 
@@ -1394,13 +1515,17 @@ async function refreshVoteMessage(interaction: UndercoverInteraction) {
   await message.edit(await buildVotePanel(interaction, game)).catch(() => undefined)
 }
 
-async function editVoteMessageClosed(interaction: UndercoverRuntimeContext, messageId?: string) {
+async function editVoteMessageClosed(
+  interaction: UndercoverRuntimeContext,
+  messageId: string | undefined,
+  gameBeforeClose: UndercoverGame,
+) {
   if (!messageId) return
   const channel = interaction.channel
   if (!channel || !('messages' in channel)) return
   const message = await channel.messages.fetch(messageId).catch(() => null)
   if (!message) return
-  await message.edit(panelWithRows('## 🗳️ 投票已结束\n\n本轮投票已经结算。', [voteActionRow(true)])).catch(() => undefined)
+  await message.edit(await buildVotePanel(interaction, gameBeforeClose, true)).catch(() => undefined)
 }
 
 async function deleteChannelMessage(interaction: UndercoverRuntimeContext, messageId?: string) {

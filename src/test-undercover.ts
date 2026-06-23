@@ -168,7 +168,7 @@ const commandJson = undercoverCommandData.toJSON()
 const commandNames = commandJson.options?.map((option: any) => option.name)
 assert.deepEqual(
   commandNames,
-  ['报名阶段', '正式开始', '开始发言', '投票', '游戏通知', '观众偷看', '结束', '帮助'],
+  ['报名阶段', '正式开始', '开始发言', '投票', '查看投票历史', '游戏通知', '观众偷看', '结束', '帮助'],
 )
 const officialStartCommand = commandJson.options?.find((option: any) => option.name === '正式开始') as any
 assert.equal(
@@ -176,6 +176,49 @@ assert.equal(
   true,
 )
 console.log('✅ 谁是卧底保留原命令并注册开始发言、投票和卧底数量选项')
+
+const emptyVoteHistoryChannelId = 'undercover-empty-vote-history-channel'
+await UndercoverEngine.startGame(emptyVoteHistoryChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '西红柿',
+  undercoverWord: '番茄',
+  allowLying: false,
+})
+let emptyVoteHistoryReply: any
+await executeUndercoverCommand({
+  guild: {},
+  client: { users: { fetch: async (userId: string) => ({ displayName: userId, username: userId }) } },
+  channelId: emptyVoteHistoryChannelId,
+  channel: {},
+  user: { id: 'not-host-user' },
+  options: {
+    getSubcommand: () => '查看投票历史',
+  },
+  reply: async (payload: any) => {
+    emptyVoteHistoryReply = payload
+  },
+} as any)
+assert.equal(getPanelText(emptyVoteHistoryReply).includes('暂无投票历史'), true)
+assert.equal(emptyVoteHistoryReply.ephemeral, undefined)
+await UndercoverEngine.endGame(emptyVoteHistoryChannelId)
+console.log('✅ 任何人可公开查看投票历史，暂无历史时不展示进行中投票')
+
+let missingVoteHistoryCommandReply: any
+await executeUndercoverCommand({
+  guild: {},
+  channelId: 'missing-vote-history-command-channel',
+  channel: {},
+  user: { id: 'any-user' },
+  options: {
+    getSubcommand: () => '查看投票历史',
+  },
+  reply: async (payload: any) => {
+    missingVoteHistoryCommandReply = payload
+  },
+} as any)
+assert.equal(missingVoteHistoryCommandReply.content.includes('当前频道没有进行中的谁是卧底'), true)
+assert.equal(missingVoteHistoryCommandReply.ephemeral, true)
+console.log('✅ 没有进行中的谁是卧底时，查看投票历史会私密返回错误')
 
 const dealtGame = UndercoverEngine.getGame(channelId)
 assert.deepEqual(
@@ -308,6 +351,15 @@ assert.equal(voteClose.ok, true)
 assert.equal(voteClose.result?.type, 'tie')
 assert.deepEqual(voteClose.result?.tiedUserIds, ['u2', 'u1'])
 assert.deepEqual(UndercoverEngine.getGame(channelId)?.aliveUserIds, ['u2', 'u3', 'u1'])
+const firstVoteHistory = UndercoverEngine.getGame(channelId)?.voteRounds?.[0]
+assert.equal(firstVoteHistory?.voteNumber, 1)
+assert.deepEqual(firstVoteHistory?.candidateUserIds, ['u2', 'u3', 'u1'])
+assert.deepEqual(firstVoteHistory?.votes, { u1: 'u2', u2: 'u1' })
+assert.equal(firstVoteHistory?.result.type, 'tie')
+assert.deepEqual(
+  firstVoteHistory?.result.type === 'tie' ? firstVoteHistory.result.tiedUserIds : [],
+  ['u2', 'u1'],
+)
 
 voteStart = await UndercoverEngine.startVote(channelId)
 assert.equal(voteStart.ok, true)
@@ -320,6 +372,134 @@ assert.equal(voteClose.result?.type, 'eliminated')
 assert.equal(voteClose.result?.eliminatedUserId, 'u2')
 assert.deepEqual(UndercoverEngine.getGame(channelId)?.aliveUserIds, ['u3', 'u1'])
 assert.deepEqual(UndercoverEngine.getGame(channelId)?.fixedPlayers?.map(player => player.number), [1, 2, 3])
+const completedVoteHistory = UndercoverEngine.getGame(channelId)?.voteRounds ?? []
+assert.equal(completedVoteHistory.length, 2)
+assert.deepEqual(completedVoteHistory[1].candidateUserIds, ['u2', 'u3', 'u1'])
+assert.deepEqual(completedVoteHistory[1].votes, { u1: 'u2', u2: 'u2', u3: 'u2' })
+assert.equal(completedVoteHistory[1].voteNumber, 2)
+assert.equal(completedVoteHistory[1].result.type, 'eliminated')
+assert.equal(
+  completedVoteHistory[1].result.type === 'eliminated'
+    ? completedVoteHistory[1].result.eliminatedUserId
+    : '',
+  'u2',
+)
+let voteHistoryReply: any
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  channelId,
+  channel: {},
+  user: { id: 'not-host-user' },
+  options: {
+    getSubcommand: () => '查看投票历史',
+  },
+  reply: async (payload: any) => {
+    voteHistoryReply = payload
+  },
+} as any)
+assert.equal(getPanelText(voteHistoryReply).includes('投票历史 (1/2)'), true)
+assert.equal(getPanelText(voteHistoryReply).includes('第 1 次投票'), true)
+assert.equal(getPanelText(voteHistoryReply).includes('玩家u1 -> 玩家u2'), true)
+assert.equal(getPanelText(voteHistoryReply).includes('玩家u2 -> 玩家u1'), true)
+assert.equal(getPanelText(voteHistoryReply).includes('1. 玩家u2：1 票'), true)
+assert.equal(getPanelText(voteHistoryReply).includes('3. 玩家u1：1 票'), true)
+assert.equal(voteHistoryReply.ephemeral, undefined)
+
+let secondVoteHistoryPage: any
+await handleUndercoverButton({
+  customId: 'undercover_vote_history_page_2',
+  channelId,
+  user: { id: 'another-user' },
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  deferUpdate: async () => undefined,
+  editReply: async (payload: any) => {
+    secondVoteHistoryPage = payload
+  },
+} as any)
+assert.equal(getPanelText(secondVoteHistoryPage).includes('投票历史 (2/2)'), true)
+assert.equal(getPanelText(secondVoteHistoryPage).includes('第 2 次投票'), true)
+assert.equal(getPanelText(secondVoteHistoryPage).includes('玩家u1 -> 玩家u2'), true)
+assert.equal(getPanelText(secondVoteHistoryPage).includes('玩家u2 -> 玩家u2'), true)
+assert.equal(getPanelText(secondVoteHistoryPage).includes('玩家u3 -> 玩家u2'), true)
+assert.equal(getPanelText(secondVoteHistoryPage).includes('1. 玩家u2：3 票'), true)
+console.log('✅ 投票历史公开分页展示每次已结束投票的关系和得票计数')
+
+const activeVoteHistoryChannelId = 'undercover-active-vote-history-channel'
+await UndercoverEngine.startGame(activeVoteHistoryChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '山',
+  undercoverWord: '丘',
+  allowLying: false,
+})
+await UndercoverEngine.addPlayer(activeVoteHistoryChannelId, 'a1')
+await UndercoverEngine.addPlayer(activeVoteHistoryChannelId, 'a2')
+await UndercoverEngine.addPlayer(activeVoteHistoryChannelId, 'a3')
+await UndercoverEngine.dealWords(activeVoteHistoryChannelId, () => 0)
+await UndercoverEngine.startVote(activeVoteHistoryChannelId)
+await UndercoverEngine.castVote(activeVoteHistoryChannelId, 'a1', 'a2')
+await UndercoverEngine.castVote(activeVoteHistoryChannelId, 'a2', 'a1')
+await UndercoverEngine.closeVote(activeVoteHistoryChannelId)
+await UndercoverEngine.startVote(activeVoteHistoryChannelId)
+await UndercoverEngine.castVote(activeVoteHistoryChannelId, 'a1', 'a1')
+let activeVoteExcludedReply: any
+await executeUndercoverCommand({
+  guild: {
+    members: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}` }),
+    },
+  },
+  client: {
+    users: {
+      fetch: async (userId: string) => ({ displayName: `玩家${userId}`, username: userId }),
+    },
+  },
+  channelId: activeVoteHistoryChannelId,
+  channel: {},
+  user: { id: 'spectator-user' },
+  options: {
+    getSubcommand: () => '查看投票历史',
+  },
+  reply: async (payload: any) => {
+    activeVoteExcludedReply = payload
+  },
+} as any)
+assert.equal(getPanelText(activeVoteExcludedReply).includes('投票历史 (1/1)'), true)
+assert.equal(getPanelText(activeVoteExcludedReply).includes('玩家a1 -> 玩家a2'), true)
+assert.equal(getPanelText(activeVoteExcludedReply).includes('玩家a1 -> 玩家a1'), false)
+await UndercoverEngine.endGame(activeVoteHistoryChannelId)
+console.log('✅ 投票历史不展示当前尚未结束的投票')
+
+let missingVoteHistoryPageReply: any
+await handleUndercoverButton({
+  customId: 'undercover_vote_history_page_1',
+  channelId: 'missing-vote-history-channel',
+  user: { id: 'any-user' },
+  deferUpdate: async () => undefined,
+  editReply: async (payload: any) => {
+    missingVoteHistoryPageReply = payload
+  },
+} as any)
+assert.equal(missingVoteHistoryPageReply.content.includes('当前频道没有进行中的谁是卧底'), true)
+assert.deepEqual(missingVoteHistoryPageReply.components, [])
+console.log('✅ 投票历史翻页在游戏不存在时会结束交互并显示错误')
 console.log('✅ 投票支持改票、平票不淘汰、唯一最高票淘汰且不重排序号')
 
 assert.deepEqual(getVoteReminderOffsets(60_000), [])
@@ -1231,6 +1411,10 @@ await UndercoverEngine.startSpeechRound(reloadChannelId, () => 0)
 await UndercoverEngine.submitSpeech(reloadChannelId, 'r2', '重载前发言')
 await UndercoverEngine.startVote(reloadChannelId, 3)
 await UndercoverEngine.castVote(reloadChannelId, 'r1', 'r2')
+await UndercoverEngine.castVote(reloadChannelId, 'r2', 'r1')
+await UndercoverEngine.closeVote(reloadChannelId)
+await UndercoverEngine.startVote(reloadChannelId, 3)
+await UndercoverEngine.castVote(reloadChannelId, 'r1', 'r2')
 assert.equal(await UndercoverEngine.setVoteMessage(reloadChannelId, 'old-vote-message'), undefined)
 assert.equal(await UndercoverEngine.setVoteMessage(reloadChannelId, 'new-vote-message'), 'old-vote-message')
 assert.equal(UndercoverEngine.getGame(reloadChannelId)?.currentVote?.messageId, 'new-vote-message')
@@ -1249,6 +1433,9 @@ assert.deepEqual(reloadedGame?.aliveUserIds, ['r2', 'r3', 'r1'])
 assert.deepEqual(reloadedGame?.currentSpeech?.entries.map(entry => entry.content), ['重载前发言'])
 assert.deepEqual(reloadedGame?.currentVote?.votes, { r1: 'r2' })
 assert.equal(reloadedGame?.currentVote?.messageId, 'new-vote-message')
+assert.equal(reloadedGame?.voteRounds?.length, 1)
+assert.deepEqual(reloadedGame?.voteRounds?.[0]?.votes, { r1: 'r2', r2: 'r1' })
+assert.equal(reloadedGame?.voteRounds?.[0]?.result.type, 'tie')
 await UndercoverEngine.endGame(reloadChannelId)
 UndercoverEngine.clearCacheForTest()
 await UndercoverEngine.reloadFromStoreForTest()
@@ -1417,7 +1604,7 @@ await UndercoverEngine.castVote(undercoverEliminatedChannelId, 'e1', 'e1')
 await UndercoverEngine.castVote(undercoverEliminatedChannelId, 'e2', 'e1')
 await UndercoverEngine.castVote(undercoverEliminatedChannelId, 'e3', 'e1')
 await UndercoverEngine.setVoteMessage(undercoverEliminatedChannelId, 'undercover-vote-panel')
-let closedVotePanelEdited = false
+let closedVotePanelEdit: any
 let undercoverResultPanel: any
 await handleUndercoverButton({
   customId: 'undercover_vote_close',
@@ -1438,8 +1625,8 @@ await handleUndercoverButton({
       fetch: async (messageId: string) => {
         assert.equal(messageId, 'undercover-vote-panel')
         return {
-          edit: async () => {
-            closedVotePanelEdited = true
+          edit: async (payload: any) => {
+            closedVotePanelEdit = payload
           },
         }
       },
@@ -1450,7 +1637,14 @@ await handleUndercoverButton({
   },
   deferUpdate: async () => undefined,
 } as any)
-assert.equal(closedVotePanelEdited, true)
+const closedVotePanelText = getPanelText(closedVotePanelEdit)
+const closedVotePanelButtons = closedVotePanelEdit.components?.[1]?.components ?? []
+assert.equal(closedVotePanelText.includes('谁是卧底投票'), true)
+assert.equal(closedVotePanelText.includes('玩家e1 -> 玩家e1'), true)
+assert.equal(closedVotePanelText.includes('玩家e2 -> 玩家e1'), true)
+assert.equal(closedVotePanelText.includes('玩家e3 -> 玩家e1'), true)
+assert.equal(closedVotePanelText.includes('3. 玩家e1：3 票'), true)
+assert.deepEqual(closedVotePanelButtons.map((component: any) => component.disabled), [true, true, true])
 assert.equal(UndercoverEngine.hasActiveGame(undercoverEliminatedChannelId), true)
 assert.equal(UndercoverEngine.getGame(undercoverEliminatedChannelId)?.currentVote, undefined)
 assert.deepEqual(UndercoverEngine.getGame(undercoverEliminatedChannelId)?.aliveUserIds, ['e2', 'e3'])
