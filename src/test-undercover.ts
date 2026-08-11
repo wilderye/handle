@@ -8,6 +8,7 @@ import {
 } from './commands/undercover.js'
 import {
   UndercoverEngine,
+  buildUndercoverPoolConfig,
   formatAudiencePeek,
   formatEndReveal,
   formatHostSecret,
@@ -59,6 +60,14 @@ async function buildHistoryPayloadForTest(channelId: string, userId: string): Pr
 }
 
 await UndercoverEngine.resetAllForTest()
+
+const poolConfig = buildUndercoverPoolConfig('postgres://example.test/db?sslmode=require')
+assert.equal(poolConfig.connectionString, 'postgres://example.test/db')
+assert.equal(poolConfig.connectionTimeoutMillis, 10_000)
+assert.equal(poolConfig.statement_timeout, 10_000)
+assert.equal(poolConfig.query_timeout, 12_000)
+assert.equal(poolConfig.keepAlive, true)
+console.log('✅ 谁是卧底数据库连接和查询都有明确超时，并启用连接保活')
 
 const parsedPairs = parseUndercoverWordPairs(`
 苹果 梨
@@ -2011,35 +2020,299 @@ assert.equal(getPanelText(undercoverResultPanel).includes('游戏结束'), false
 await UndercoverEngine.endGame(undercoverEliminatedChannelId)
 console.log('✅ 投票只宣布被淘汰玩家，不判断卧底或平民胜利')
 
-const failingEndChannelId = 'undercover-failing-end-channel'
-const failingEndGame = await UndercoverEngine.startGame(failingEndChannelId, hostId, {
+const orderedEndChannelId = 'undercover-ordered-end-channel'
+const orderedEndGame = await UndercoverEngine.startGame(orderedEndChannelId, hostId, {
   wordSource: 'custom',
   civilianWord: '西瓜',
   undercoverWord: '哈密瓜',
   allowLying: false,
 })
-assert.equal(failingEndGame.ok, true)
+assert.equal(orderedEndGame.ok, true)
 
-const replyFailure = new Error('simulated Discord interaction response failure')
-await assert.rejects(
-  () => executeUndercoverCommand({
-    guild: {},
-    channelId: failingEndChannelId,
+const orderedEndEvents: string[] = []
+let orderedEndPanel: any
+await executeUndercoverCommand({
+  guild: {
+    roles: {
+      cache: {
+        find: () => ({ id: 'host-role', name: '主持人' }),
+      },
+      fetch: async () => new Map(),
+    },
+    members: {
+      fetch: async () => ({
+        roles: {
+          remove: async () => {
+            orderedEndEvents.push('role')
+          },
+        },
+      }),
+    },
+  },
+  channelId: orderedEndChannelId,
+  user: { id: hostId },
+  options: { getSubcommand: () => '结束' },
+  deferReply: async () => {
+    orderedEndEvents.push('defer')
+  },
+  editReply: async (payload: any) => {
+    orderedEndEvents.push('edit')
+    assert.equal(UndercoverEngine.hasActiveGame(orderedEndChannelId), false)
+    orderedEndPanel = payload
+  },
+} as any)
+assert.deepEqual(orderedEndEvents, ['defer', 'role', 'edit'])
+assert.equal(getPanelText(orderedEndPanel).includes('谁是卧底结束'), true)
+console.log('✅ 结束命令先确认交互，完成状态和身份组清理后再显示结束面板')
+
+const cleanupFailureChannelId = 'undercover-cleanup-failure-channel'
+await UndercoverEngine.startGame(cleanupFailureChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '苹果',
+  undercoverWord: '梨',
+  allowLying: false,
+})
+const originalEndGame = UndercoverEngine.endGame
+const cleanupOriginalConsoleError = console.error
+let cleanupFailureReply: any
+let cleanupFailureRoleRemoved = false
+let cleanupCommandError: unknown
+UndercoverEngine.endGame = async () => {
+  throw new Error('simulated cleanup failure')
+}
+console.error = () => undefined
+try {
+  try {
+    await executeUndercoverCommand({
+      guild: {
+        roles: {
+          cache: {
+            find: () => ({ id: 'host-role', name: '主持人' }),
+          },
+          fetch: async () => new Map(),
+        },
+        members: {
+          fetch: async () => ({
+            roles: {
+              remove: async () => {
+                cleanupFailureRoleRemoved = true
+              },
+            },
+          }),
+        },
+      },
+      channelId: cleanupFailureChannelId,
+      user: { id: hostId },
+      options: { getSubcommand: () => '结束' },
+      deferReply: async () => undefined,
+      editReply: async (payload: any) => {
+        cleanupFailureReply = payload
+      },
+    } as any)
+  } catch (error) {
+    cleanupCommandError = error
+  }
+} finally {
+  console.error = cleanupOriginalConsoleError
+  UndercoverEngine.endGame = originalEndGame
+}
+assert.equal(cleanupCommandError, undefined)
+assert.equal(String(cleanupFailureReply).includes('结束失败'), true)
+assert.equal(UndercoverEngine.hasActiveGame(cleanupFailureChannelId), true)
+assert.equal(cleanupFailureRoleRemoved, false)
+await UndercoverEngine.endGame(cleanupFailureChannelId)
+console.log('✅ 结束清理失败时保留可重试状态，并明确回复失败而不是显示成功')
+
+const replyFallbackChannelId = 'undercover-reply-fallback-channel'
+await UndercoverEngine.startGame(replyFallbackChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '咖啡',
+  undercoverWord: '奶茶',
+  allowLying: false,
+})
+const replyFallbackOriginalConsoleError = console.error
+let fallbackEndPanel: any
+let replyFallbackCommandError: unknown
+console.error = () => undefined
+try {
+  try {
+    await executeUndercoverCommand({
+      guild: {
+        roles: {
+          cache: {
+            find: () => null,
+          },
+          fetch: async () => ({ find: () => undefined }),
+        },
+        members: {
+          fetch: async () => null,
+        },
+      },
+      channelId: replyFallbackChannelId,
+      channel: {
+        send: async (payload: any) => {
+          fallbackEndPanel = payload
+        },
+      },
+      user: { id: hostId },
+      options: { getSubcommand: () => '结束' },
+      deferReply: async () => undefined,
+      editReply: async () => {
+        throw new Error('simulated final reply failure')
+      },
+    } as any)
+  } catch (error) {
+    replyFallbackCommandError = error
+  }
+} finally {
+  console.error = replyFallbackOriginalConsoleError
+}
+assert.equal(replyFallbackCommandError, undefined)
+assert.equal(UndercoverEngine.hasActiveGame(replyFallbackChannelId), false)
+assert.equal(getPanelText(fallbackEndPanel).includes('谁是卧底结束'), true)
+console.log('✅ 游戏清理成功后结束回复失败会补发频道面板，不会恢复旧游戏')
+
+const concurrentEndChannelId = 'undercover-concurrent-end-channel'
+await UndercoverEngine.startGame(concurrentEndChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '白天',
+  undercoverWord: '黑夜',
+  allowLying: false,
+})
+let releaseConcurrentEnds!: () => void
+const concurrentEndGate = new Promise<void>(resolve => {
+  releaseConcurrentEnds = resolve
+})
+let concurrentDeferredCount = 0
+const concurrentEndReplies: any[] = []
+const createConcurrentEndInteraction = () => ({
+  guild: {
+    roles: {
+      cache: {
+        find: () => null,
+      },
+      fetch: async () => ({ find: () => undefined }),
+    },
+    members: {
+      fetch: async () => null,
+    },
+  },
+  channelId: concurrentEndChannelId,
+  user: { id: hostId },
+  options: { getSubcommand: () => '结束' },
+  deferReply: async () => {
+    concurrentDeferredCount += 1
+    if (concurrentDeferredCount === 2) releaseConcurrentEnds()
+    await concurrentEndGate
+  },
+  editReply: async (payload: any) => {
+    concurrentEndReplies.push(payload)
+  },
+})
+await Promise.all([
+  executeUndercoverCommand(createConcurrentEndInteraction() as any),
+  executeUndercoverCommand(createConcurrentEndInteraction() as any),
+])
+assert.equal(
+  concurrentEndReplies.filter(payload => getPanelText(payload).includes('谁是卧底结束')).length,
+  1,
+)
+assert.equal(
+  concurrentEndReplies.filter(payload => String(payload).includes('已经结束')).length,
+  1,
+)
+assert.equal(UndercoverEngine.hasActiveGame(concurrentEndChannelId), false)
+console.log('✅ 同时结束同一局时只公布一次结果，后续请求提示本局已经结束')
+
+const roleFailureChannelId = 'undercover-role-failure-channel'
+await UndercoverEngine.startGame(roleFailureChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '春天',
+  undercoverWord: '秋天',
+  allowLying: false,
+})
+const roleFailureOriginalConsoleError = console.error
+let roleFailurePanel: any
+console.error = () => undefined
+try {
+  await executeUndercoverCommand({
+    guild: {
+      roles: {
+        cache: {
+          find: () => ({ id: 'host-role', name: '主持人' }),
+        },
+        fetch: async () => ({ find: () => undefined }),
+      },
+      members: {
+        fetch: async () => ({
+          roles: {
+            remove: async () => {
+              throw new Error('missing permission')
+            },
+          },
+        }),
+      },
+    },
+    channelId: roleFailureChannelId,
     user: { id: hostId },
     options: { getSubcommand: () => '结束' },
     deferReply: async () => undefined,
-    reply: async () => {
-      throw replyFailure
+    editReply: async (payload: any) => {
+      roleFailurePanel = payload
     },
-    editReply: async () => {
-      throw replyFailure
-    },
-  } as any),
-  /simulated Discord interaction response failure/,
-)
-assert.equal(UndercoverEngine.hasActiveGame(failingEndChannelId), true)
-await UndercoverEngine.endGame(failingEndChannelId)
-console.log('✅ 结束命令回复失败时不会提前删除游戏状态，主持人可重试结束')
+  } as any)
+} finally {
+  console.error = roleFailureOriginalConsoleError
+}
+assert.equal(UndercoverEngine.hasActiveGame(roleFailureChannelId), false)
+assert.equal(getPanelText(roleFailurePanel).includes('游戏已结束，但无法移除'), true)
+console.log('✅ 身份组移除失败会显示警告，但游戏状态仍保持已结束')
+
+const roleLookupFailureChannelId = 'undercover-role-lookup-failure-channel'
+await UndercoverEngine.startGame(roleLookupFailureChannelId, hostId, {
+  wordSource: 'custom',
+  civilianWord: '雨伞',
+  undercoverWord: '雨衣',
+  allowLying: false,
+})
+const roleLookupOriginalConsoleError = console.error
+let roleLookupFailurePanel: any
+let roleLookupCommandError: unknown
+console.error = () => undefined
+try {
+  try {
+    await executeUndercoverCommand({
+      guild: {
+        roles: {
+          cache: {
+            find: () => null,
+          },
+          fetch: async () => {
+            throw new Error('simulated role lookup failure')
+          },
+        },
+        members: {
+          fetch: async () => null,
+        },
+      },
+      channelId: roleLookupFailureChannelId,
+      user: { id: hostId },
+      options: { getSubcommand: () => '结束' },
+      deferReply: async () => undefined,
+      editReply: async (payload: any) => {
+        roleLookupFailurePanel = payload
+      },
+    } as any)
+  } catch (error) {
+    roleLookupCommandError = error
+  }
+} finally {
+  console.error = roleLookupOriginalConsoleError
+}
+assert.equal(roleLookupCommandError, undefined)
+assert.equal(UndercoverEngine.hasActiveGame(roleLookupFailureChannelId), false)
+assert.equal(getPanelText(roleLookupFailurePanel).includes('身份组清理失败'), true)
+console.log('✅ 身份组查询失败也不会阻止结束面板，并会提示人工清理')
 
 await UndercoverEngine.resetAllForTest()
 

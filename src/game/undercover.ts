@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
-import pkg from 'pg'
+import pkg, { type PoolConfig } from 'pg'
 import { fileURLToPath } from 'url'
 
 const { Pool } = pkg
@@ -133,6 +133,19 @@ interface UndercoverStore {
   deleteGame(channelId: string): Promise<void>
 }
 
+export function buildUndercoverPoolConfig(connectionString: string): PoolConfig {
+  return {
+    connectionString: connectionString.replace('?sslmode=require', ''),
+    ssl: {
+      rejectUnauthorized: false,
+    },
+    connectionTimeoutMillis: 10_000,
+    statement_timeout: 10_000,
+    query_timeout: 12_000,
+    keepAlive: true,
+  }
+}
+
 class MemoryUndercoverStore implements UndercoverStore {
   private storedGames = new Map<string, UndercoverGame>()
 
@@ -153,13 +166,7 @@ class PGUndercoverStore implements UndercoverStore {
   private pool: any
 
   constructor(connectionString: string) {
-    const cleanUrl = connectionString.replace('?sslmode=require', '')
-    this.pool = new Pool({
-      connectionString: cleanUrl,
-      ssl: {
-        rejectUnauthorized: false,
-      },
-    })
+    this.pool = new Pool(buildUndercoverPoolConfig(connectionString))
   }
 
   async init(): Promise<void> {

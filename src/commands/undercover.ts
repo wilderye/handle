@@ -730,12 +730,55 @@ async function handleEnd(interaction: ChatInputCommandInteraction) {
 
   await interaction.deferReply()
   const endContent = await buildEndContent(interaction, game)
-  await interaction.editReply(panel(endContent))
-  clearVoteTimers(interaction.channelId)
-  await UndercoverEngine.endGame(interaction.channelId)
 
+  let ended: boolean
+  try {
+    ended = await UndercoverEngine.endGame(interaction.channelId)
+  } catch (error) {
+    console.error('[Undercover] 清理游戏状态失败:', error)
+    await interaction.editReply('❌ 游戏结束失败，状态尚未清理，请稍后重试。')
+    return
+  }
+
+  if (!ended) {
+    await interaction.editReply('ℹ️ 本局已经结束。')
+    return
+  }
+
+  clearVoteTimers(interaction.channelId)
+
+  let roleWarning = ''
   if (interaction.guild) {
-    await removeHostRoleFromMember(interaction.guild, game.hostId, '谁是卧底结束')
+    try {
+      roleWarning = await removeHostRoleFromMember(interaction.guild, game.hostId, '谁是卧底结束')
+    } catch (error) {
+      console.error('[Undercover] 清理主持人身份组失败:', error)
+      roleWarning = '\n\n⚠️ 游戏已结束，但主持人身份组清理失败，请管理员手动检查。'
+    }
+  }
+
+  await sendEndPanelWithFallback(interaction, endContent + roleWarning)
+}
+
+async function sendEndPanelWithFallback(
+  interaction: ChatInputCommandInteraction,
+  content: string,
+): Promise<void> {
+  const payload = panel(content)
+  try {
+    await interaction.editReply(payload)
+    return
+  } catch (error) {
+    console.error('[Undercover] 编辑结束面板失败:', error)
+  }
+
+  const channel = interaction.channel
+  if (!channel || !('send' in channel)) return
+
+  try {
+    await channel.send(payload)
+  } catch (error) {
+    console.error('[Undercover] 补发结束面板失败:', error)
   }
 }
 

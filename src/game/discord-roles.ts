@@ -73,16 +73,18 @@ export async function removeHostRoleFromMember(
   guild: Guild,
   userId: string,
   reason: string,
-): Promise<void> {
+): Promise<string> {
   const role = await findRoleByNames(guild, HOST_ROLE_NAMES)
-  if (!role) return
+  if (!role) return ''
 
   const member = await guild.members.fetch(userId).catch(() => null)
-  if (!member) return
+  if (!member) return ''
 
   try {
     await member.roles.remove(role.id, reason)
-  } catch (error) {
+    return ''
+  } catch (error: any) {
     console.error('[Roles] 移除主持人身份组失败:', error)
+    return `\n\n⚠️ 游戏已结束，但无法移除「${role.name}」身份组：${error.message}`
   }
 }
